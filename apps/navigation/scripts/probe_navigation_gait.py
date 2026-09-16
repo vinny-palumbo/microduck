@@ -21,7 +21,6 @@ import math
 import sys
 from pathlib import Path
 
-import mujoco
 import numpy as np
 
 
@@ -41,6 +40,22 @@ def requested_command(t, speed, yaw_rate, duration, stop_profile):
     if stop_profile == "counter_yaw" and stopping < 0.2:
         return np.array([0.0, 0.0, -yaw_rate])
     return np.zeros(3)
+
+
+def steering(mode, desired, turned, left_limit=0.5, right_limit=0.3):
+    """Compare feedback laws; desired/turned are radians, limits are rad/s."""
+    error = math.atan2(math.sin(desired - turned), math.cos(desired - turned))
+    if mode == "proportional":
+        return max(-left_limit, min(left_limit, 2 * error))
+    if desired == 0:
+        return 0.0
+    sign = math.copysign(1, desired)
+    limit = left_limit if sign > 0 else right_limit
+    if mode == "fixed":
+        return sign * limit
+    if mode == "clipped":
+        return sign * max(0.0, min(limit, 2 * error * sign))
+    raise ValueError(f"unknown steering mode: {mode}")
 
 
 def load_rehearsal(rl_path):
@@ -87,7 +102,20 @@ def descendants(model, root):
     return bodies
 
 
-def probe(ip, args, speed, yaw_rate, duration, stop_profile, repeat):
+def probe(
+    ip,
+    args,
+    speed,
+    yaw_rate,
+    duration,
+    stop_profile,
+    repeat,
+    steering_mode="rate",
+    desired_heading=0.0,
+    distance_cutoff=None,
+):
+    import mujoco
+
     with contextlib.redirect_stdout(io.StringIO()):
         bam = None
         if args.bam:
@@ -109,7 +137,16 @@ def probe(ip, args, speed, yaw_rate, duration, stop_profile, repeat):
         )
     root = int(model.joint("trunk_base_freejoint").qposadr[0])
     robot_bodies = descendants(model, int(model.body("trunk_base").id))
-    data.qpos[root : root + 7] = [0, 0, 0.125, 1, 0, 0, 0]
+    spawn_yaw = math.radians(args.spawn[2])
+    data.qpos[root : root + 7] = [
+        args.spawn[0],
+        args.spawn[1],
+        0.125,
+        math.cos(spawn_yaw / 2),
+        0,
+        0,
+        math.sin(spawn_yaw / 2),
+    ]
     data.qpos[controller.joint_qpos_indices] = controller.default_pose
     if bam is not None:
         bam.reset(data.qpos)
@@ -124,15 +161,29 @@ def probe(ip, args, speed, yaw_rate, duration, stop_profile, repeat):
     previous = None
     traces = []
     unusual_contacts = set()
+    obstacle_contacts = set()
+    first_obstacle_contact_s = None
     first_contact_s = None
     stop_reason = None
     stop_at = None
     reference_xy = None
     reference_yaw = None
     head = np.array(args.head)
+    last_feedback_tick = -1
+    feedback_yaw = 0.0
     for tick in range(ticks):
         elapsed = (tick - warmup_ticks) / 50
+        if reference_xy is None and elapsed >= 0:
+            reference_xy = data.qpos[root : root + 2].copy()
+            reference_yaw = heading(data.qpos[root + 3 : root + 7])
         command = requested_command(elapsed, speed, yaw_rate, duration, stop_profile)
+        if steering_mode != "rate" and 0 <= elapsed < duration:
+            feedback_tick = math.floor((elapsed + 1e-9) / 0.05)
+            if feedback_tick != last_feedback_tick:
+                turned = heading(data.qpos[root + 3 : root + 7]) - reference_yaw
+                feedback_yaw = steering(steering_mode, math.radians(desired_heading), turned)
+                last_feedback_tick = feedback_tick
+            command[2] = feedback_yaw
         if stop_reason:
             command = np.zeros(3)
         smooth += args.command_alpha * (command - smooth)
@@ -153,14 +204,20 @@ def probe(ip, args, speed, yaw_rate, duration, stop_profile, repeat):
             if elapsed >= 0:
                 contacts = contact_names(model, data, robot_bodies)
                 unusual_contacts.update(contacts)
+                obstacles = {
+                    pair
+                    for pair in contacts
+                    if not any(name == "floor" or name.startswith("floor_") for name in pair)
+                }
+                obstacle_contacts.update(obstacles)
+                if obstacles and first_obstacle_contact_s is None:
+                    first_obstacle_contact_s = elapsed
                 if contacts and first_contact_s is None:
                     first_contact_s = elapsed
         xyz = data.qpos[root : root + 3].copy()
         q = data.qpos[root + 3 : root + 7]
         yaw = heading(q)
         tilt = math.degrees(math.acos(np.clip(1 - 2 * (q[1] ** 2 + q[2] ** 2), -1, 1)))
-        if reference_xy is None and elapsed >= 0:
-            reference_xy, reference_yaw = xyz[:2].copy(), yaw
         if elapsed >= 0:
             excursion = abs(
                 math.atan2(math.sin(yaw - reference_yaw), math.cos(yaw - reference_yaw))
@@ -170,6 +227,11 @@ def probe(ip, args, speed, yaw_rate, duration, stop_profile, repeat):
                     stop_reason = "unsafe_pose"
                 elif np.linalg.norm(xyz[:2] - reference_xy) > args.max_distance:
                     stop_reason = "distance_cutoff"
+                elif (
+                    distance_cutoff is not None
+                    and np.linalg.norm(xyz[:2] - reference_xy) >= distance_cutoff
+                ):
+                    stop_reason = "target_distance_cutoff"
                 elif excursion > math.radians(args.max_turn):
                     stop_reason = "heading_cutoff"
                 if stop_reason:
@@ -195,6 +257,13 @@ def probe(ip, args, speed, yaw_rate, duration, stop_profile, repeat):
     forward, lateral = rotate @ delta
     result = {
         "command": [speed, 0.0, yaw_rate],
+        "steering": steering_mode,
+        "desired_heading_deg": desired_heading,
+        "distance_cutoff_m": distance_cutoff,
+        "feedback_source": "perfect_simulator_yaw_and_position_for_controller_screening_only"
+        if steering_mode != "rate"
+        else "none",
+        "spawn": args.spawn,
         "duration_s": duration,
         "stop_profile": stop_profile,
         "repeat": repeat,
@@ -218,6 +287,9 @@ def probe(ip, args, speed, yaw_rate, duration, stop_profile, repeat):
         "min_height_m": float(samples[:, 3].min()),
         "final_applied_command": smooth.tolist(),
         "nonfoot_contacts": sorted(unusual_contacts),
+        "obstacle_or_self_contacts": sorted(obstacle_contacts),
+        "first_obstacle_contact_s": first_obstacle_contact_s,
+        "collision_free_steering_trial": not obstacle_contacts,
         "first_nonfoot_contact_s": first_contact_s,
         "truth_source": "independent_MuJoCo_freejoint_qpos_not_robot_odometry",
     }
@@ -242,6 +314,17 @@ def main():
     )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--head", nargs=4, type=float, default=[0, 0, 0, 0])
+    parser.add_argument(
+        "--spawn", nargs=3, type=float, default=[0, 0, 0], metavar=("X", "Y", "YAW_DEG")
+    )
+    parser.add_argument(
+        "--controllers",
+        nargs="+",
+        choices=["rate", "proportional", "clipped", "fixed"],
+        default=["rate"],
+    )
+    parser.add_argument("--headings", nargs="+", type=float, default=[0])
+    parser.add_argument("--distance-cutoffs", nargs="+", type=float, default=[None])
     parser.add_argument("--settle", type=float, default=3)
     parser.add_argument("--command-alpha", type=float, default=0.2)
     parser.add_argument("--action-scale", type=float, default=0.9)
@@ -256,6 +339,9 @@ def main():
         *args.yaw_rates,
         *args.durations,
         *args.head,
+        *args.spawn,
+        *args.headings,
+        *(value for value in args.distance_cutoffs if value is not None),
         args.settle,
         args.command_alpha,
         args.action_scale,
@@ -278,6 +364,10 @@ def main():
         parser.error("action scale must be (0,1], distance cutoff (0,1]m, turn cutoff (0,90]deg")
     if any(abs(value) > limit for value, limit in zip(args.head, [1.1, 1.1, 1.4, 0.31])):
         parser.error("head offsets exceed the training command ranges")
+    if any(abs(value) > 30 for value in args.headings):
+        parser.error("feedback headings must remain within +/-30 degrees")
+    if any(value is not None and not 0.03 <= value <= 0.2 for value in args.distance_cutoffs):
+        parser.error("feedback distance cutoffs must be 0.03–0.2 metres")
     args.scene = (
         args.scene or args.rl / "src/mjlab_microduck/robot/microduck/scene_allcollisions.xml"
     )
@@ -311,10 +401,26 @@ def main():
             for duration in args.durations:
                 for profile in args.stop_profiles:
                     for repeat in range(args.repeats):
-                        result, trace = probe(ip, args, speed, yaw_rate, duration, profile, repeat)
-                        print(json.dumps(result, allow_nan=False), flush=True)
-                        report["trials"].append({**result, "trace": trace})
-                        args.output.write_text(json.dumps(report, indent=2, allow_nan=False))
+                        for mode in args.controllers:
+                            for desired in args.headings:
+                                for cutoff in args.distance_cutoffs:
+                                    result, trace = probe(
+                                        ip,
+                                        args,
+                                        speed,
+                                        yaw_rate,
+                                        duration,
+                                        profile,
+                                        repeat,
+                                        mode,
+                                        desired,
+                                        cutoff,
+                                    )
+                                    print(json.dumps(result, allow_nan=False), flush=True)
+                                    report["trials"].append({**result, "trace": trace})
+                                    args.output.write_text(
+                                        json.dumps(report, indent=2, allow_nan=False)
+                                    )
 
 
 if __name__ == "__main__":
