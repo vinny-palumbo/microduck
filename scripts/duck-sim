@@ -210,8 +210,7 @@ up() {
     cat > "$STATE/robotd.toml" <<TOML
 [policy]
 enabled = true
-walk = "$POLICIES/alpha_walking.onnx"
-stand = "$POLICIES/alpha_stand.onnx"
+walk = "$POLICIES/velstand.onnx"
 sitstand = "$POLICIES/alpha_sitstand.onnx"
 ground_pick = "$POLICIES/alpha_ground_pick.onnx"
 kick_left = "$POLICIES/ball_kick_left.onnx"
@@ -308,6 +307,7 @@ TOML
                 $SETSID nohup "$REPO/target/debug/mediad" \
                 --sim-camera "127.0.0.1:$((FRAME_PORT + i))" \
                 --config "$STATE/mediad-$name.toml" \
+                --frame-socket "$STATE/$name-media.sock" \
                 --robot-socket "$STATE/$name.sock" --tof-socket "$STATE/$name-tof.sock" \
                 --port $((8443 + i)) --web-port $((8080 + i)) \
                 > "$STATE/$name-media.log" 2>&1 &
