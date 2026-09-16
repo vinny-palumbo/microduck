@@ -81,3 +81,6 @@ reach.
 
 `spaces/vision-demo/fake_duck.py` stands in for one, and `scripts/duck-sim` runs the real daemons
 against a MuJoCo body ([`robot/simulation.md`](robot/simulation.md)).
+
+The [navigation bridge](../apps/navigation/README.md) provides guarded observation and movement
+tools for a model-free first integration test against that simulator.

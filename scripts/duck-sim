@@ -166,6 +166,9 @@ down() {
 build_daemons() {
     say "building the daemons from $(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
     (cd "$REPO" && cargo build --quiet -p robotd -p robotctl -p tof -p sounds)
+    if [ -n "$CAMERAS" ]; then
+        (cd "$REPO" && cargo build --quiet -p mediad)
+    fi
 }
 
 # **A checkout has no policies.** They live on the Hub and reach a robot through
@@ -210,8 +213,7 @@ up() {
     cat > "$STATE/robotd.toml" <<TOML
 [policy]
 enabled = true
-walk = "$POLICIES/alpha_walking.onnx"
-stand = "$POLICIES/alpha_stand.onnx"
+walk = "$POLICIES/velstand.onnx"
 sitstand = "$POLICIES/alpha_sitstand.onnx"
 ground_pick = "$POLICIES/alpha_ground_pick.onnx"
 kick_left = "$POLICIES/ball_kick_left.onnx"
@@ -302,16 +304,18 @@ TOML
     while [ "$i" -lt "$DUCKS" ]; do
         if has_camera "$i"; then
             name="$(duck_name "$i")"
-            [ -x "$REPO/target/debug/mediad" ] || (cd "$REPO" && cargo build --quiet -p mediad)
             printf '[media]\nquality = "360p30"\n' > "$STATE/mediad-$name.toml"
             DUCK_RUNTIME_DIR="$STATE" RUST_LOG="${RUST_LOG:-info}" \
                 $SETSID nohup "$REPO/target/debug/mediad" \
                 --sim-camera "127.0.0.1:$((FRAME_PORT + i))" \
                 --config "$STATE/mediad-$name.toml" \
+                --frame-socket "$STATE/$name-media.sock" \
                 --robot-socket "$STATE/$name.sock" --tof-socket "$STATE/$name-tof.sock" \
                 --port $((8443 + i)) --web-port $((8080 + i)) \
                 > "$STATE/$name-media.log" 2>&1 &
             echo $! > "$STATE/$name-media.pid"
+            wait_for_camera "$((8080 + i))" "$!" ||
+                die "$name camera did not come up. $STATE/$name-media.log has why; check GST_PLUGIN_PATH includes your webrtcsink plugin."
             say "$name can see — console at http://127.0.0.1:$((8080 + i))"
         fi
         i=$((i + 1))
@@ -402,7 +406,7 @@ f.write('{"op":"read"}\n'); f.flush()
 r = json.loads(f.readline())
 print("%.3f %.3f" % (r.get("trunk_z", -1.0), r["imu"]["gravity"][2]))
 PY
-)" || return 0
+)" || return 1
     trunk="${read_z% *}"
     z="${read_z#* }"
     standing="$(python3 -c "print(1 if $trunk > 0.095 else 0)" 2>/dev/null || echo 0)"
@@ -449,10 +453,14 @@ start_body() {
     [ -d "$RL" ] || die "no simulator at $RL. It is the microduck_rl repo — set DUCK_SIM_RL."
     [ -x "$RL/.venv/bin/python" ] || die "$RL has no .venv. Run \`uv sync\` there first."
     mkdir -p "$STATE"
-    say "starting the body — a MuJoCo window should open"
     # `DUCK_SIM_VIEWER=0` for a window-less run: watching costs frames, and the daemon's loop is
     # wall-clock, so a simulator that cannot keep up is a robot that cannot balance.
     [ "${DUCK_SIM_VIEWER:-1}" = 0 ] && HEADLESS=--headless || HEADLESS=
+    if [ -n "$HEADLESS" ]; then
+        say "starting the body headless"
+    else
+        say "starting the body — a MuJoCo window should open"
+    fi
     # **The viewer needs `mjpython` on macOS.** MuJoCo's passive viewer has to own the main thread
     # and the Cocoa event loop, so `launch_passive` refuses under a plain interpreter — the body
     # server catches that and runs headless, which is a window that never opens and no error to
@@ -511,6 +519,30 @@ wait_for_socket() {
     return 1
 }
 
+# A console listener can start before the pipeline fails (for example, a missing webrtcsink).
+# An actual frame proves the camera and media process both started before we enable movement.
+wait_for_camera() {
+    python3 - "$1" "$2" <<'PY'
+import os, sys, time, urllib.error, urllib.request
+
+port, pid = map(int, sys.argv[1:])
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        sys.exit(1)
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/frame", timeout=1) as response:
+            if response.status == 200 and response.read(8) == b"\x89PNG\r\n\x1a\n":
+                sys.exit(0)
+    except (OSError, urllib.error.URLError):
+        pass
+    time.sleep(0.2)
+sys.exit(1)
+PY
+}
+
 # Walking has no robotctl subcommand — intents come from a pad or the console — so this is the
 # smallest client that sends one. Resent at 10 Hz because `robotd` expires an intent 500 ms after
 # they stop arriving, which is what makes a dropped connection stop the robot rather than run it
@@ -547,7 +579,7 @@ a, w = now(), time.perf_counter()
 time.sleep(3.0)
 print("%.2f" % ((now() - a) / (time.perf_counter() - w)))
 PY
-)" || return 0
+)" || return 1
     case "$factor" in
         1.0*|0.9[5-9]) say "the world is running at ${factor}x real time" ;;
         *) say "the world is at ${factor}x real time — below 1.0 the policies cannot balance. \

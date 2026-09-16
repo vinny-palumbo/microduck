@@ -17,8 +17,8 @@ runs, unchanged and unable to tell. `tofd --sim` gets its 8×8 depth frames from
 `mediad --sim-camera` gets a rendered head-camera image, mounted a quarter turn off like the real one.
 
 The MuJoCo half lives in [`microduck_rl`](https://github.com/pollen-robotics/microduck_rl) as
-`duck-body`: one process, one window, N duck bodies in one scene, with the BAM actuator models the
-policies were trained against.
+`duck-body`: one process, one window, N duck bodies in one scene. Motor behavior and its remaining
+limits are documented in [the simulation design](../design/simulation.md#7-what-it-is-and-is-not-a-twin-of).
 
 **What it is good for:** anything in the daemons and their clients — IPC, `robotctl`, the console,
 the updater, the chorale, policies standing and walking, mapping. **What it cannot tell you:**
@@ -109,10 +109,24 @@ The default world is a bare floor. `apartment` is six rooms in 7×6 m with doorw
 purpose, so a pose is recognisable from the duck's 45° forward view; anything with a slash is a path
 to your own scene, and `microduck_rl`'s `scene_*.xml` files are the built-in ones.
 
+For initial navigation trials, `apartment_flat` reuses those rooms and covers the stairwell opening
+at floor level. It lets obstacle avoidance be exercised before drop-off detection:
+
+```sh
+DUCK_SIM_VIEWER=0 DUCK_SIM_SCENE=apartment_flat DUCK_SIM_CAMERAS=a scripts/duck-sim up
+scripts/duck-sim status
+scripts/duck-sim realtime
+```
+
 Cameras are opt-in per duck (`a`, `a,c`, or `all`) because a rendered frame costs 12 ms against
 0.3 ms to step four ducks' physics: one camera is a third of a core, four is most of one. Each duck
 with a camera gets its own `mediad`, and its console is served at `http://127.0.0.1:8080`, `8081`,
 ... by index, exactly the page a robot serves.
+
+Camera runs need GStreamer's `webrtcsink` plugin. If it was built outside a standard plugin
+directory, set `GST_PLUGIN_PATH` to the directory containing `libgstrswebrtc.so` before running
+the command. `up` checks that each camera returns an actual frame before enabling its duck;
+a failed camera startup points to that duck's media log instead of reporting success.
 
 ## Knobs
 
@@ -123,7 +137,7 @@ Environment variables, all optional:
 | `DUCK_SIM_RL` | `~/Pollen/microduck_rl` | Where `duck-body`, the scenes and the ONNX runtime are. |
 | `DUCK_SIM_STATE` | `~/.cache/duck-sim` | Sockets, logs, params, the rootfs and the ducks' overlays. Short on purpose: a unix socket path is capped at about 108 bytes. |
 | `DUCK_SIM_DUCKS` | `1` | How many ducks; `boot N` sets it too. |
-| `DUCK_SIM_SCENE` | bare floor | A scene name (`apartment`) or a path. |
+| `DUCK_SIM_SCENE` | bare floor | A scene name (`apartment`, `apartment_flat`) or a path. |
 | `DUCK_SIM_CAMERAS` | none | Which ducks render a camera: `a`, `a,c`, `all`. |
 | `DUCK_SIM_DUCK` | `duck-a` | Which duck `ctl` and `monitor` talk to. |
 | `DUCK_SIM_KEYFRAME` | `SIT` | Where a duck starts: `SIT` folded on the floor (the standing policy rises from it), `HOME`, `STAND`, `FOLD`. |

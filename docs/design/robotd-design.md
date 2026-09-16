@@ -581,8 +581,25 @@ make each one single-writer in practice, so last-writer-wins means what it says.
 stamped, because the loop's real question is never "what is the value" but "how old is it";
 that is what the deadman reads.
 
-`look` (gaze direction) is deferred; both gaze forms will be exposed, and arbitration between
-them is last-writer-wins with no blending.
+`robot.head` takes joint offsets from HOME, in radians: zero asks for the nominal head pose.
+`robot.look` takes a point `(x, y, z)` in the trunk frame, in metres, and an absolute
+`neck_pitch` posture (default zero). The daemon solves the head IK, subtracts HOME, and sends
+the resulting offsets through the same policy command path. Both forms arbitrate last-writer-wins.
+The response's `head` contains offsets that can be resent as `robot.head`; `joint_targets`
+contains absolute desired joint angles for comparison with measured `robot.state.joints`.
+Acceptance does not prove that the physical head has reached those angles.
+
+API 29 fixes the earlier absolute-angle/offset mismatch and adds `joint_targets`. Install the
+daemon release containing API 29 alongside gaze clients using this response; clients should
+report a missing field instead of applying a compensation for an older daemon. Existing
+gamepad and direct `robot.head` offset commands retain their meaning.
+
+API 30 adds `robot.model.joint_home`, absolute HOME angles in `joint_names` order. A gaze
+client preserving neck posture adds the applied neck command (`robot.state.head[0]`) to
+the published neck HOME angle. Reusing measured neck pitch as the next command accumulates
+steady tracking error through repeated looks. Install the API 30 daemon alongside clients
+requiring this field; missing geometry is an error, not a reason to hardcode HOME.
+Measured camera poses remain the basis for judging optical alignment.
 
 ### 3.2 State out
 
@@ -1013,7 +1030,7 @@ projected gravity, and where the camera and the ToF sensor are. All three are ad
   anything yet; when it is, it streams beside `tof.frame`, not here.
 - **`frames: {camera, tof}`** are trunk-frame poses at this tick's *measured* head joints from
   `kinematics::head::HeadFk` — the same FK `robot.look` solves against — and **`robot.model`**
-  answers the static geometry (trunk height, joint order, ToF beam directions, the poses at head
+  answers the static geometry (trunk height, joint order and HOME angles, ToF beam directions, the poses at head
   zero). The kinematics stay in one crate; a client asks rather than transcribes.
 
 Cost: three small structs per published tick, only while someone is subscribed; the FK is ~50 ns.

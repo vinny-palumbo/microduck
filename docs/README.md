@@ -81,5 +81,6 @@ thinking is not lost and does not get mistaken for a decision.
 | | |
 |---|---|
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Building, testing, repo layout, conventions, releasing. |
+| [`../apps/navigation/README.md`](../apps/navigation/README.md) | The simulator navigation bridge: WebRTC observations, bounded actions, guards and recordings. |
 | [`project/npu-bringup.md`](project/npu-bringup.md) | The duck detector on the RK3566's NPU: what runs, how to benchmark it, and the frame path that is still missing. |
 | [`../deploy/README.md`](../deploy/README.md) | What a robot image is configured with, and what provisioning actually does. |

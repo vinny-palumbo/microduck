@@ -1,0 +1,23 @@
+[
+  {
+    "tool": "look_at",
+    "arguments": {
+      "x": 1,
+      "y": 0,
+      "z": 0
+    },
+    "reason": "Fixture: center gaze."
+  },
+  {
+    "tool": "observe",
+    "arguments": {},
+    "reason": "Fixture: capture the new view."
+  },
+  {
+    "tool": "finish",
+    "arguments": {
+      "status": "blocked"
+    },
+    "reason": "Scripted plumbing test complete; no visual inference was performed."
+  }
+]

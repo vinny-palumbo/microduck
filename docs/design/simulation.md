@@ -227,8 +227,15 @@ detection, kinematics, odometry, maploc, the whole IPC surface and its clients, 
 election and beat, the systemd units with their real `User=`, groups, `RuntimeDirectory=` and
 hardening, and the updater.
 
-Modelled — the real code path, synthesised input: actuator response (BAM models fitted to the real
-XL330s), the IMU, ToF depth, RSSI, the camera image, and release provenance on an x86 host.
+Modelled — the real code path, synthesised input: actuator response, the IMU, ToF depth, RSSI,
+the camera image, and release provenance on an x86 host.
+
+`duck-body` currently uses the scene's XML position actuators. Training and the deployment
+rehearsal use BAM motor models, so simulator actuator fidelity is a known gap. An experimental
+BAM integration improved fidelity but did not recover useful settled movement; it was archived
+and reverted. The [navigation validation record](../../apps/navigation/VALIDATION.md) preserves
+the measured results and backup location. The guarded visual-agent loop can be tested separately
+from locomotion improvement; command delivery alone is not evidence of walking or turning.
 
 Absent — not exercised at all: the Dynamixel bus driver, the BLE radio, the camera ISP and rkaiq's
 3A, the NPU, the hardware encoder and its RGA path, thermals and battery.
