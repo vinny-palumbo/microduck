@@ -243,6 +243,21 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await anext(stream), b"new")
         await stream.aclose()
 
+    async def test_late_audio_cannot_resurrect_a_disconnected_session(self):
+        await self.robot.connect()
+        stream = self.robot.audio_chunks()
+        pending = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        self.robot._rpc.abandon("link gone")
+        self.robot._record_audio(b"\x00\x00" * 16000)
+        with self.assertRaisesRegex(ConnectionError, "link gone"):
+            await pending
+        await self.robot.connect()
+        self.robot._record_audio(b"new")
+        stream = self.robot.audio_chunks()
+        self.assertEqual(await anext(stream), b"new")
+        await stream.aclose()
+
     async def test_robot_stereo_audio_is_resampled_to_model_pcm(self):
         await self.robot.connect()
         release = asyncio.Event()

@@ -488,10 +488,15 @@ start_body() {
     if [ -n "$CAMERAS" ]; then
         cam_args="--cameras $CAMERAS --frame-port $FRAME_PORT"
     fi
+    set --
+    if [ -n "${DUCK_SIM_EVALUATION_LOG:-}" ]; then
+        set -- "$@" --evaluation-log "$DUCK_SIM_EVALUATION_LOG"
+    fi
     # shellcheck disable=SC2086
     $SETSID nohup "$PY_BIN" -m mjlab_microduck.sim.body_server \
         --port "$PORT" --ducks "$DUCKS" --keyframe "${DUCK_SIM_KEYFRAME:-SIT}" $HEADLESS $scene_arg \
-        $cam_args \
+        $cam_args --start-x "${DUCK_SIM_START_X:-0}" --start-y "${DUCK_SIM_START_Y:-0}" \
+        --start-yaw-deg "${DUCK_SIM_START_YAW_DEG:-0}" "$@" \
         > "$STATE/body.log" 2>&1 &
     echo $! > "$STATE/body.pid"
     wait_for_port || die "the simulator did not come up. $STATE/body.log has why."
@@ -598,7 +603,9 @@ down_containers() {
     i=0
     while [ "$i" -lt 16 ]; do
         name="$(duck_name "$i")"
-        if sudo systemctl is-active --quiet "$name" 2>/dev/null; then
+        # Querying a unit needs no privilege; a plain-process simulator must not
+        # hang on a sudo password prompt for containers that do not exist.
+        if systemctl is-active --quiet "$name" 2>/dev/null; then
             sudo systemctl stop "$name" 2>/dev/null || true
         fi
         merged="$STATE/ducks/$name/merged"

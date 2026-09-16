@@ -79,6 +79,7 @@ class WebRtcRobot:
         if hasattr(self, "_audio_queue"):
             self._end_audio()
         self._audio_queue: asyncio.Queue = asyncio.Queue(maxsize=25)
+        self._audio_closed = False
         self._samples: dict[str, dict[str, Any] | None] = {
             "camera": None,
             "state": None,
@@ -157,11 +158,14 @@ class WebRtcRobot:
             self._end_audio()
 
     def _end_audio(self) -> None:
+        self._audio_closed = True
         while not self._audio_queue.empty():
             self._audio_queue.get_nowait()
         self._audio_queue.put_nowait(None)
 
     def _record_audio(self, pcm: bytes) -> None:
+        if self._audio_closed:
+            return
         # 20 ms chunks bound the queue to half a second even for long source frames.
         for start in range(0, len(pcm), 640):
             if self._audio_queue.full():
@@ -178,7 +182,7 @@ class WebRtcRobot:
                 raise ConnectionError(
                     "No robot microphone audio; use --audio mic or --audio-wav in simulation"
                 ) from None
-            if item is None:
+            if item is None or self._audio_closed or generation != self._generation:
                 raise ConnectionError(self._lost_reason or "robot audio session closed")
             received_at, pcm = item
             if time.monotonic() - received_at <= 0.5:
