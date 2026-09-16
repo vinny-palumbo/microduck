@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 198 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 247 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -40,6 +40,19 @@ Current integration evidence:
   the 2 s timeout, 0.10 rad alignment tolerance, and correction limit. All seven subsequent
   real-daemon gaze checks passed in `runs/20260916T221950Z-0eba319c`, including left-to-right
   and right-to-left 90° sweeps; final errors were 0.063–0.086 rad in 1.35–1.61 s.
+- Run `runs/20260916T222047Z-c5e37668` accepted the spoken kitchen instruction, scanned both
+  sides, and travelled a net 1.755 m without collisions or falls. The streaming model then
+  incorrectly claimed arrival while the final image showed a plain wall. Exact-run scoring
+  of `voice-mission-004.truth.jsonl` rejected arrival; `goal_verified` remained false. This
+  establishes that a model completion claim alone is insufficient evidence.
+- The stateless standard ER 2 arrival reviewer rejected that plain-wall image and accepted
+  three offline-rendered interior views showing an oven, faucet, and refrigerator. The
+  latter is a perception fixture, explicitly not navigation evidence. In live run
+  `runs/20260916T222830Z-7f5703b9`, fresh four-view scans rejected three premature arrival
+  claims and allowed exploration between them. The mission then stopped blocked as designed.
+  Exact scoring of `voice-mission-005.truth.jsonl` found 1.377 m net travel, complete coverage,
+  no collisions or falls, and no arrival. The streaming navigator's visual interpretation
+  remains the limiting issue; the independent review prevents a false success report.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

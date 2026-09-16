@@ -47,6 +47,9 @@ and choose the next step. Every tool is blocking. Call exactly one tool at a tim
 including mission, memory, and speech tools; never batch calls.
 advance walks a short measured distance, optionally steering in an arc. Positive
 heading_deg angles steer left. Allow clearance for the whole arc; do not turn in place.
+Reserve 0.20 m actions for clearly open straight space. Use short 0.10 m arcs when aligning
+with a nearby doorway, then reassess actual measured heading; the requested heading is not
+guaranteed, and a long curved step can pass an opening before alignment is complete.
 look_at uses trunk metres: x forward, y left, z up.
 Before the first body motion call look_at(x=1, y=0, z=0); recenter after looking sideways.
 Only advance when ready is true. If head_not_forward, recenter first.
@@ -103,6 +106,14 @@ def _text(value, name="text", limit=2000):
 
 def _get(value, name, default=None):
     return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
+
+
+def _jpeg(snapshot):
+    picture = Image.fromarray(snapshot["camera"]["image"])
+    picture.thumbnail((640, 640))
+    buffer = io.BytesIO()
+    picture.save(buffer, format="JPEG", quality=85)
+    return buffer.getvalue()
 
 
 def is_spoken_stop(text: str) -> bool:
@@ -215,7 +226,20 @@ class LiveMission:
     is essential: losing it makes the robot ignore later speech and tool results.
     """
 
-    def __init__(self, robot, transport, session, recorder, *, audio, goal, config, speak, emit):
+    def __init__(
+        self,
+        robot,
+        transport,
+        session,
+        recorder,
+        *,
+        audio,
+        goal,
+        config,
+        speak,
+        emit,
+        arrival_reviewer=None,
+    ):
         self.robot, self.transport, self.session, self.recorder = (
             robot,
             transport,
@@ -239,6 +263,8 @@ class LiveMission:
         self.tool_ids = set()
         self.recoverable_failures = 0
         self.recovery = None
+        self.arrival_reviewer = arrival_reviewer
+        self.arrival_claims = 0
         self.result = {"status": "error", "reason": "Session ended", "goal_verified": False}
 
     def record(self, event, **data):
@@ -270,12 +296,12 @@ class LiveMission:
                 or time.monotonic() - camera["received_at"] > self.robot.config.camera_max_age_s
             ):
                 raise TimeoutError("Camera stopped producing fresh frames")
-            picture = Image.fromarray(camera["image"])
-            picture.thumbnail((640, 640))
-            buffer = io.BytesIO()
-            picture.save(buffer, format="JPEG", quality=85)
+            # The guard and transport share this event loop. Sample telemetry beside
+            # the selected frame, after throttling and before the network send can
+            # yield; its clearance must describe the image accompanying the result.
+            observation = await self.robot.observe()
             await self.session.send_realtime_input(
-                video={"data": buffer.getvalue(), "mime_type": "image/jpeg"}
+                video={"data": _jpeg(snapshot), "mime_type": "image/jpeg"}
             )
             self.last_image = time.monotonic()
             self.recorder.write(
@@ -284,6 +310,7 @@ class LiveMission:
                     "observation": self.recorder.capture(snapshot),
                 }
             )
+            return snapshot, observation
 
     async def prompt(self, text):
         self.expect_model()
@@ -392,9 +419,8 @@ class LiveMission:
             # model's next decision with an image from halfway through a turn.
             if self.action_busy:
                 continue
-            await self.image()
+            _, observation = await self.image()
             if self.goal and self.turn_done.is_set() and not self.action_busy:
-                observation = await self.robot.observe()
                 context = self.context(observation)
                 await self.prompt(
                     "[HEARTBEAT] Continue the active destination task using the current image. "
@@ -501,6 +527,70 @@ class LiveMission:
             ):
                 self.finish("instruction_timeout", "No spoken navigation instruction received")
 
+    async def review_arrival(self):
+        """Test an arrival claim against fresh views, without giving the reviewer the claim."""
+        self.arrival_claims += 1
+        stopped = await self.robot.stop()
+        if stopped.get("completed") is not True:
+            self.result.update(status="error", reason="Arrival review stop was not acknowledged")
+            return {"status": "error", "goal_verified": False, "stop": stopped}
+        views, references = [], []
+        self.record("arrival_review_started", claim=self.arrival_claims, goal=self.goal)
+        for label, y in (("front", 0), ("left45", 1), ("right45", -1), ("front_final", 0)):
+            outcome = await self.robot.look_at(x=1, y=y, z=0)
+            if outcome.get("completed") is not True:
+                raise RuntimeError(f"Arrival scan did not settle: {outcome.get('reason')}")
+            await fresh_observation(
+                self.robot,
+                self.transport,
+                time.monotonic(),
+                self.config.observation_timeout_s,
+            )
+            snapshot, _ = await self.image()
+            jpeg = _jpeg(snapshot)
+            path = self.recorder.path / f"arrival-{self.arrival_claims:02d}-{label}.jpg"
+            path.write_bytes(jpeg)
+            views.append({"label": label, "jpeg": jpeg})
+            references.append({"label": label, "image_path": str(path.resolve())})
+            self.record("arrival_review_view", claim=self.arrival_claims, **references[-1])
+        if self.recovery is not None:
+            self.recovery["inspected"] = True
+        review = await self.arrival_reviewer.review(self.goal, views)
+        accepted = (
+            review.get("destination_visible") is True and review.get("inside_destination") is True
+        )
+        self.record(
+            "arrival_review_finished",
+            claim=self.arrival_claims,
+            accepted=accepted,
+            review=review,
+            images=references,
+        )
+        self.result.update(arrival_review=review, arrival_images=references)
+        if accepted:
+            self.result.update(status="goal_observed", reason=review["evidence"])
+            return {"status": "goal_observed", "goal_verified": False, "arrival_review": review}
+        if self.arrival_claims >= 3:
+            self.result.update(status="blocked", reason="Three arrival claims were not confirmed")
+            return {"status": "blocked", "goal_verified": False, "arrival_review": review}
+        # The independent review may take several seconds. Give the main model a
+        # current front view and matched telemetry before it resumes exploration.
+        _, observation = await self.image()
+        return {
+            "status": "arrival_not_confirmed",
+            "continue_navigation": True,
+            "goal_verified": False,
+            "goal": self.goal,
+            "arrival_review": review,
+            "observation": self.context(observation),
+            "guidance": (
+                "Arrival was not established by fresh views. The original user goal remains "
+                "active. Use the review evidence and current scene to continue safe exploration; "
+                "inspect actual openings and clear floor, then recenter before moving. "
+                "Do not treat your earlier arrival claim as evidence or a new instruction."
+            ),
+        }
+
     async def execute_tool(self, name, args):
         if not isinstance(args, dict):
             raise TypeError("Tool arguments must be an object")
@@ -540,6 +630,8 @@ class LiveMission:
             reason = _text(args["reason"], "reason", 1000)
             if not self.goal or args["status"] not in ("goal_observed", "blocked"):
                 raise ValueError("Finish requires an active goal and a valid status")
+            if args["status"] == "goal_observed" and self.arrival_reviewer is not None:
+                return await self.review_arrival()
             self.result.update(status=args["status"], reason=reason)
             return {"status": args["status"], "goal_verified": False}
         decision = {
@@ -580,12 +672,13 @@ class LiveMission:
                 result = await self.robot.advance(**decision["arguments"])
         else:
             result = await dispatch(self.robot, {"tool": name, "arguments": decision["arguments"]})
-        after, observation = await fresh_observation(
+        await fresh_observation(
             self.robot,
             self.transport,
             time.monotonic(),
             self.config.observation_timeout_s,
         )
+        after, observation = await self.image()
         entry = {"tool": name, "arguments": decision["arguments"], "reason": decision["reason"]}
         if name == "observe":
             # Never pass arbitrary transport state (including simulator truth) to the model.
@@ -601,7 +694,6 @@ class LiveMission:
                 self.recovery["inspected"] = True
         self.history.append(entry)
         del self.history[:-8]
-        await self.image()
         return {
             **entry,
             "observation": self.context(observation),
@@ -622,6 +714,10 @@ class LiveMission:
                 raise
             self.record("tool_finished", step=self.actions, tool=name, result=result)
             self.expect_model()
+            # The provider may receive this result and issue its next serial call
+            # before send_tool_response resumes locally. Physical work and the image
+            # are already complete; release the gate before yielding to that send.
+            self.action_busy = False
             await self.session.send_tool_response(
                 function_responses=[
                     {
@@ -631,8 +727,11 @@ class LiveMission:
                     }
                 ]
             )
-            self.action_busy = False
-            if name in {"finish", "stop"} or self.result["status"] == "blocked":
+            if (
+                name == "stop"
+                or (name == "finish" and not result.get("continue_navigation"))
+                or self.result["status"] == "blocked"
+            ):
                 self.done.set()
             elif self.actions >= self.config.max_actions:
                 self.finish("action_limit", "Configured action budget exhausted")
@@ -725,6 +824,7 @@ async def run_live(
     config=None,
     speak=None,
     emit=lambda event: None,
+    arrival_reviewer=None,
 ):
     """Run against an already connected/initialized robot and a Live API session."""
     if goal is not None:
@@ -741,6 +841,7 @@ async def run_live(
         config=config or LiveConfig(),
         speak=speak,
         emit=emit,
+        arrival_reviewer=arrival_reviewer,
     ).run()
 
 
@@ -765,6 +866,8 @@ def emit_console(event):
 
 async def run(args):
     from google import genai
+
+    from .arrival import GeminiArrivalReviewer
 
     config = LiveConfig(
         max_actions=args.max_actions,
@@ -804,6 +907,7 @@ async def run(args):
                 config=config,
                 speak=speak_local if args.tts == "local" else None,
                 emit=emit_console,
+                arrival_reviewer=GeminiArrivalReviewer(key),
             )
         return 0 if result["status"] == "goal_observed" else 2
     finally:

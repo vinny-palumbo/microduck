@@ -2,12 +2,15 @@
 
 import asyncio
 import copy
+import io
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from duck_nav.cli import Recorder
 from duck_nav.live import (
@@ -380,7 +383,7 @@ async def recovery_mission(tmp_path, robot):
     )
 
     async def no_image():
-        pass
+        return robot.snapshot(), await robot.observe()
 
     mission.image = no_image
     return mission
@@ -553,6 +556,43 @@ async def test_speech_tool_awaits_actual_playback(tmp_path):
     assert result["status"] == "goal_observed"
 
 
+async def test_next_serial_tool_can_arrive_before_response_send_resumes(tmp_path):
+    session = Session()
+
+    async def prompt(_):
+        session.call("say", message="The current view includes the kitchen")
+
+    async def response(response):
+        if response["name"] == "say":
+            session.call("finish", status="goal_observed", reason="Inside beside sink")
+            # A delivered WebSocket write can still be waiting on local backpressure
+            # while the peer has already sent the next valid blocking call.
+            await asyncio.sleep(0)
+
+    session.on_prompt, session.on_response = prompt, response
+    result, robot, _ = await run(tmp_path, session, goal="Kitchen")
+    assert result["status"] == "goal_observed"
+    assert result["actions"] == 2
+    assert robot.calls == ["stop", "stop"]
+
+
+async def test_tool_after_terminal_response_is_never_executed(tmp_path):
+    session = Session()
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="Inside beside sink")
+
+    async def response(_):
+        session.call("advance", distance_m=0.1, reason="Late model call after arrival")
+        await asyncio.sleep(0)
+
+    session.on_prompt, session.on_response = prompt, response
+    result, robot, _ = await run(tmp_path, session, goal="Kitchen")
+    assert result["status"] == "goal_observed"
+    assert result["actions"] == 1
+    assert robot.calls == ["stop", "stop"]
+
+
 async def test_start_does_not_replace_already_accepted_user_goal(tmp_path):
     session = Session()
 
@@ -651,6 +691,213 @@ async def test_image_rate_limit_is_at_most_one_hertz(tmp_path):
     await mission.image()
     assert time.monotonic() - first >= 0.99
     assert len(session.inputs) == 2
+
+
+@pytest.mark.parametrize("tool", ["look_at", "advance"])
+async def test_tool_telemetry_matches_image_after_throttle(tmp_path, tool):
+    class ChangingRobot(Robot):
+        changed = False
+
+        def snapshot(self):
+            snapshot = super().snapshot()
+            snapshot["camera"]["image"][:] = 255 if self.changed else 0
+            return snapshot
+
+        async def observe(self):
+            return {
+                **await super().observe(),
+                "ready": not self.changed,
+                "guard_reason": "obstacle" if self.changed else None,
+                "depth_summary": {"view": "current" if self.changed else "previous"},
+            }
+
+    robot, session = ChangingRobot(), Session()
+    mission = LiveMission(
+        robot,
+        robot,
+        session,
+        Recorder(tmp_path),
+        audio=None,
+        goal="Kitchen",
+        config=LiveConfig(),
+        speak=None,
+        emit=lambda event: None,
+    )
+    mission.last_image = time.monotonic()
+
+    async def sensors_change_during_throttle():
+        await asyncio.sleep(0.05)
+        robot.changed = True
+
+    update = asyncio.create_task(sensors_change_during_throttle())
+    arguments = {"x": 1, "y": 0, "z": 0} if tool == "look_at" else {"distance_m": 0.1}
+    result = await mission.execute_tool(tool, {**arguments, "reason": "Inspect current scene"})
+    await update
+    jpeg = session.inputs[-1]["video"]["data"]
+    assert np.asarray(Image.open(io.BytesIO(jpeg))).mean() > 250
+    assert result["observation"]["ready"] is False
+    assert result["observation"]["guard_reason"] == "obstacle"
+    assert result["observation"]["depth"] == {"view": "current"}
+
+
+class ArrivalReviewer:
+    def __init__(self, verdicts):
+        self.verdicts = iter(verdicts)
+        self.calls = []
+
+    async def review(self, goal, views):
+        self.calls.append((goal, copy.deepcopy(views)))
+        accepted = next(self.verdicts)
+        return {
+            "destination_visible": accepted,
+            "inside_destination": accepted,
+            "evidence": "Inside beside sink and stove"
+            if accepted
+            else "A flat wall fills the views",
+            "uncertainty": "Visual assessment only",
+        }
+
+
+@pytest.fixture
+def fast_images(monkeypatch):
+    original = LiveMission.image
+
+    async def send_image(mission):
+        # Separate tests cover the real one-hertz throttle. These exercise review
+        # state transitions while retaining actual JPEG encoding and recording.
+        mission.last_image = -float("inf")
+        return await original(mission)
+
+    monkeypatch.setattr(LiveMission, "image", send_image)
+
+
+async def test_arrival_review_rejects_wall_then_continues_original_goal(tmp_path, fast_images):
+    session, reviewer = Session(), ArrivalReviewer([False])
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="UNTRUSTED_EARLIER_ARRIVAL_CLAIM")
+
+    async def response(response):
+        if response["response"].get("continue_navigation"):
+            assert response["response"]["goal"] == "Go to the kitchen"
+            assert (
+                response["response"]["arrival_review"]["evidence"] == "A flat wall fills the views"
+            )
+            session.call("advance", distance_m=0.1, reason="Continue toward visible clear floor")
+        elif response["name"] == "advance":
+            session.call("finish", status="blocked", reason="No further visible clear route")
+
+    session.on_prompt, session.on_response = prompt, response
+    result, robot, recorder = await run(
+        tmp_path,
+        session,
+        goal="Go to the kitchen",
+        arrival_reviewer=reviewer,
+    )
+    assert result["status"] == "blocked"
+    assert result["goal"] == "Go to the kitchen"
+    assert robot.calls == [
+        "stop",
+        "stop",
+        "look_at",
+        "look_at",
+        "look_at",
+        "look_at",
+        "advance",
+        "stop",
+    ]
+    goal, views = reviewer.calls[0]
+    assert goal == "Go to the kitchen"
+    assert [view["label"] for view in views] == ["front", "left45", "right45", "front_final"]
+    assert all(set(view) == {"label", "jpeg"} for view in views)
+    assert "UNTRUSTED_EARLIER_ARRIVAL_CLAIM" not in repr(reviewer.calls)
+    assert "simulator_truth" not in repr(reviewer.calls)
+    assert len(result["arrival_images"]) == 4
+    for view, reference in zip(views, result["arrival_images"], strict=True):
+        assert Path(reference["image_path"]).read_bytes() == view["jpeg"]
+    assert '"event": "arrival_review_finished"' in (recorder.path / "events.jsonl").read_text()
+
+
+async def test_accepted_arrival_remains_unverified_model_assessment(tmp_path, fast_images):
+    session, reviewer = Session(), ArrivalReviewer([True])
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="I think this is the kitchen")
+
+    session.on_prompt = prompt
+    result, robot, _ = await run(tmp_path, session, goal="Kitchen", arrival_reviewer=reviewer)
+    assert result["status"] == "goal_observed"
+    assert result["goal_verified"] is False
+    assert result["reason"] == "Inside beside sink and stove"
+    assert robot.calls.count("look_at") == 4
+    assert "advance" not in robot.calls
+
+
+async def test_three_rejected_arrival_claims_end_blocked(tmp_path, fast_images):
+    session, reviewer = Session(), ArrivalReviewer([False, False, False])
+
+    async def claim(_):
+        session.call("finish", status="goal_observed", reason="Still claiming arrival")
+
+    async def response(response):
+        if response["response"].get("continue_navigation"):
+            await claim(None)
+
+    session.on_prompt, session.on_response = claim, response
+    result, robot, _ = await run(tmp_path, session, goal="Kitchen", arrival_reviewer=reviewer)
+    assert result["status"] == "blocked"
+    assert len(reviewer.calls) == 3
+    assert robot.calls.count("look_at") == 12
+    assert result["actions"] == 3
+    assert "advance" not in robot.calls
+
+
+async def test_arrival_scan_failure_stops_without_review(tmp_path, fast_images):
+    class BadGaze(Robot):
+        async def look_at(self, x, y, z):
+            self.calls.append("look_at")
+            return {"completed": False, "reason": "gaze_timeout"}
+
+    session, reviewer = Session(), ArrivalReviewer([True])
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="Claim before failed scan")
+
+    session.on_prompt = prompt
+    result, robot, _ = await run(
+        tmp_path,
+        session,
+        BadGaze(),
+        goal="Kitchen",
+        arrival_reviewer=reviewer,
+    )
+    assert result["status"] == "error"
+    assert not reviewer.calls
+    assert robot.calls[-1] == "stop"
+
+
+async def test_spoken_cancel_interrupts_pending_arrival_review(tmp_path, fast_images):
+    entered = asyncio.Event()
+
+    class WaitingReview:
+        async def review(self, goal, views):
+            entered.set()
+            await asyncio.Event().wait()
+
+    session = Session()
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="Claim before review")
+
+    session.on_prompt = prompt
+    task = asyncio.create_task(
+        run(tmp_path, session, goal="Kitchen", arrival_reviewer=WaitingReview())
+    )
+    await asyncio.wait_for(entered.wait(), 1)
+    session.push({"server_content": {"input_transcription": {"text": "Stop"}}})
+    result, robot, _ = await asyncio.wait_for(task, 0.5)
+    assert result["status"] == "cancelled"
+    assert robot.calls[-1] == "stop"
 
 
 def test_live_schema_and_extended_house_budget():
