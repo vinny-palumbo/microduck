@@ -8,12 +8,14 @@ dependencies = [
     "aiohttp>=3.12,<4",
     "numpy>=2",
     "pillow>=11",
+    "google-genai>=1.67,<2",
 ]
 
 [project.scripts]
 duck-nav = "duck_nav.cli:main"
 duck-agent = "duck_nav.agent:main"
 duck-agent-key = "duck_nav.credentials:main"
+duck-voice = "duck_nav.live:main"
 
 [build-system]
 requires = ["hatchling"]

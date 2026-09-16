@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from av import AudioResampler
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,14 @@ class WebRtcRobot:
         self._ready = False
         self._lost_reason: str | None = None
         self._generation = 0
+        self._audio_tasks: set[asyncio.Task] = set()
         self._clear_samples()
 
     def _clear_samples(self) -> None:
+        # Wake listeners on the old session; buffered speech must never cross reconnects.
+        if hasattr(self, "_audio_queue"):
+            self._end_audio()
+        self._audio_queue: asyncio.Queue = asyncio.Queue(maxsize=25)
         self._samples: dict[str, dict[str, Any] | None] = {
             "camera": None,
             "state": None,
@@ -148,6 +154,35 @@ class WebRtcRobot:
         if generation == self._generation:
             self._ready = False
             self._lost_reason = reason
+            self._end_audio()
+
+    def _end_audio(self) -> None:
+        while not self._audio_queue.empty():
+            self._audio_queue.get_nowait()
+        self._audio_queue.put_nowait(None)
+
+    def _record_audio(self, pcm: bytes) -> None:
+        # 20 ms chunks bound the queue to half a second even for long source frames.
+        for start in range(0, len(pcm), 640):
+            if self._audio_queue.full():
+                self._audio_queue.get_nowait()
+            self._audio_queue.put_nowait((time.monotonic(), pcm[start : start + 640]))
+
+    async def audio_chunks(self):
+        """Robot microphone as 16 kHz mono PCM; fail if no microphone is offered."""
+        queue, generation = self._audio_queue, self._generation
+        while generation == self._generation:
+            try:
+                item = await asyncio.wait_for(queue.get(), 10)
+            except TimeoutError:
+                raise ConnectionError(
+                    "No robot microphone audio; use --audio mic or --audio-wav in simulation"
+                ) from None
+            if item is None:
+                raise ConnectionError(self._lost_reason or "robot audio session closed")
+            received_at, pcm = item
+            if time.monotonic() - received_at <= 0.5:
+                yield pcm
 
     def _make_session(self) -> tuple[Any, Any]:
         Rpc, LanConsumer, MediaStreamError = _load_dependencies()
@@ -175,6 +210,13 @@ class WebRtcRobot:
             async def _build_pc(self) -> None:
                 await super()._build_pc()
                 pc = self._pc
+
+                @pc.on("track")
+                def audio_track(track: Any) -> None:
+                    if track.kind == "audio":
+                        task = asyncio.create_task(self._consume_audio(track))
+                        owner._audio_tasks.add(task)
+                        task.add_done_callback(owner._audio_tasks.discard)
 
                 @pc.on("connectionstatechange")
                 def connection_changed() -> None:
@@ -235,6 +277,23 @@ class WebRtcRobot:
                 except Exception:
                     logger.exception("camera stream ended")
 
+            async def _consume_audio(self, track: Any) -> None:
+                resampler = AudioResampler(format="s16", layout="mono", rate=16000)
+                try:
+                    while generation == owner._generation:
+                        frame = await track.recv()
+                        if generation != owner._generation:
+                            return
+                        for converted in resampler.resample(frame):
+                            owner._record_audio(converted.to_ndarray().tobytes())
+                except (MediaStreamError, asyncio.CancelledError):
+                    pass
+                except Exception:
+                    logger.exception("microphone stream ended")
+                finally:
+                    if generation == owner._generation:
+                        owner._end_audio()
+
         rpc = ObservedRpc(timeout=self.rpc_timeout)
         return rpc, ObservedConsumer(self.host, rpc, self.port)
 
@@ -284,6 +343,11 @@ class WebRtcRobot:
     async def close(self) -> None:
         self._generation += 1
         self._ready = False
+        tasks = list(self._audio_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         consumer, rpc = self._consumer, self._rpc
         self._consumer = self._rpc = None
         self._clear_samples()

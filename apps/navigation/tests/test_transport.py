@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 import unittest
 from fractions import Fraction
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 import numpy as np
+from av import AudioFrame
 
 from duck_nav.transport import WebRtcRobot, _load_module
 
@@ -211,6 +213,66 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(Exception, "no answer"):
             await asyncio.wait_for(self.robot.request("silent"), 0.5)
         self.assertEqual(self.robot._rpc._pending, {})
+
+    async def test_audio_keeps_recent_pcm_and_bounds_latency(self):
+        await self.robot.connect()
+        pcm = bytes(range(256)) * 100
+        self.robot._record_audio(pcm)
+        self.assertEqual(self.robot._audio_queue.qsize(), 25)
+        stream = self.robot.audio_chunks()
+        chunk = await anext(stream)
+        self.assertEqual(len(chunk), 640)
+        self.assertEqual(chunk, pcm[15 * 640 : 16 * 640])
+        await stream.aclose()
+
+    async def test_audio_listener_wakes_on_loss_and_drops_buffered_speech(self):
+        await self.robot.connect()
+        stream = self.robot.audio_chunks()
+        pending = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        self.robot._record_audio(b"\x00\x00" * 320)
+        self.robot._rpc.abandon("link gone")
+        with self.assertRaisesRegex(ConnectionError, "link gone"):
+            await pending
+
+    async def test_audio_drops_chunks_older_than_half_second(self):
+        await self.robot.connect()
+        self.robot._audio_queue.put_nowait((time.monotonic() - 1, b"old"))
+        self.robot._record_audio(b"new")
+        stream = self.robot.audio_chunks()
+        self.assertEqual(await anext(stream), b"new")
+        await stream.aclose()
+
+    async def test_robot_stereo_audio_is_resampled_to_model_pcm(self):
+        await self.robot.connect()
+        release = asyncio.Event()
+
+        class Microphone:
+            sent = False
+
+            async def recv(self):
+                if self.sent:
+                    await release.wait()
+                self.sent = True
+                frame = AudioFrame.from_ndarray(
+                    np.full((1, 9600), 1000, dtype=np.int16), format="s16", layout="stereo"
+                )
+                frame.sample_rate = 48000
+                frame.pts = 0
+                frame.time_base = Fraction(1, 48000)
+                return frame
+
+        task = asyncio.create_task(self.robot._consumer._consume_audio(Microphone()))
+        stream = self.robot.audio_chunks()
+        try:
+            pcm = await asyncio.wait_for(anext(stream), 1)
+            samples = np.frombuffer(pcm, dtype=np.int16)
+            self.assertEqual(len(samples), 320)
+            self.assertTrue(np.all(samples > 900))
+        finally:
+            task.cancel()
+            await task
+            await stream.aclose()
 
 
 if __name__ == "__main__":
