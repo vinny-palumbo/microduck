@@ -835,6 +835,111 @@ async def test_accepted_arrival_remains_unverified_model_assessment(tmp_path, fa
     assert "advance" not in robot.calls
 
 
+@pytest.mark.parametrize(
+    "reason", ["unhealthy", "state_stale", "depth_stale", "depth_too_close", "disconnected"]
+)
+async def test_arrival_cannot_override_guard_that_changes_during_review(
+    tmp_path, fast_images, reason
+):
+    class ChangingHealth(Robot):
+        guard_reason = None
+
+        async def observe(self):
+            observation = await super().observe()
+            current = self.guard_reason
+            # Simulate a transient fault that a subsequent observation would miss.
+            self.guard_reason = None
+            return {**observation, "ready": current is None, "guard_reason": current}
+
+    robot, session = ChangingHealth(), Session()
+
+    class Review(ArrivalReviewer):
+        async def review(self, goal, views):
+            verdict = await super().review(goal, views)
+            robot.guard_reason = reason
+            if reason == "disconnected":
+                robot.connected = False
+            return verdict
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="Claim before review latency")
+
+    session.on_prompt = prompt
+    result, robot, recorder = await run(
+        tmp_path, session, robot, goal="Kitchen", arrival_reviewer=Review([True])
+    )
+    assert result["status"] == "error"
+    assert result["arrival_guard"]["guard_reason"] == reason
+    assert result["arrival_review"]["inside_destination"] is True
+    events = [
+        json.loads(line) for line in (recorder.path / "events.jsonl").read_text().splitlines()
+    ]
+    assert not any(e["event"] == "arrival_review_finished" and e["accepted"] for e in events)
+    assert robot.calls[-1] == "stop"
+
+
+@pytest.mark.parametrize("failure", ["frozen_camera", "unsettled_motion"])
+async def test_arrival_requires_fresh_settled_observation_after_review(
+    tmp_path, fast_images, failure
+):
+    class ChangingSensors(Robot):
+        review_finished_at = None
+
+        def snapshot(self):
+            snapshot = super().snapshot()
+            if self.review_finished_at is not None:
+                if failure == "frozen_camera":
+                    snapshot["camera"]["received_at"] = self.review_finished_at
+                else:
+                    snapshot["state"]["data"]["move"]["applied"] = [0.1, 0, 0]
+            return snapshot
+
+    robot, session = ChangingSensors(), Session()
+
+    class Review(ArrivalReviewer):
+        async def review(self, goal, views):
+            verdict = await super().review(goal, views)
+            robot.review_finished_at = time.monotonic()
+            return verdict
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="Claim before sensors changed")
+
+    session.on_prompt = prompt
+    result, _, recorder = await run(
+        tmp_path,
+        session,
+        robot,
+        goal="Kitchen",
+        arrival_reviewer=Review([True]),
+        config=LiveConfig(observation_timeout_s=0.1),
+    )
+    assert result["status"] == "error"
+    events = [
+        json.loads(line) for line in (recorder.path / "events.jsonl").read_text().splitlines()
+    ]
+    assert not any(e["event"] == "arrival_review_finished" and e["accepted"] for e in events)
+
+
+async def test_arrival_permits_ordinary_obstacle_while_safely_stopped(tmp_path, fast_images):
+    class ObstacleRobot(Robot):
+        async def observe(self):
+            return {**await super().observe(), "ready": False, "guard_reason": "obstacle"}
+
+    session = Session()
+
+    async def prompt(_):
+        session.call("finish", status="goal_observed", reason="Inside with furniture ahead")
+
+    session.on_prompt = prompt
+    result, _, _ = await run(
+        tmp_path, session, ObstacleRobot(), goal="Kitchen", arrival_reviewer=ArrivalReviewer([True])
+    )
+    assert result["status"] == "goal_observed"
+    assert result["arrival_guard"]["guard_reason"] == "obstacle"
+    assert result["arrival_guard"]["motion"]["applied"] == [0, 0, 0]
+
+
 async def test_three_rejected_arrival_claims_end_blocked(tmp_path, fast_images):
     session, reviewer = Session(), ArrivalReviewer([False, False, False])
 

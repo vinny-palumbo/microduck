@@ -586,6 +586,27 @@ class LiveMission:
             ):
                 self.finish("instruction_timeout", "No spoken navigation instruction received")
 
+    def check_arrival_guard(self, snapshot, observation):
+        """An image review cannot override the robot's current health or sensor guard."""
+        reason = observation["guard_reason"]
+        if not snapshot.get("connected"):
+            reason = "disconnected"
+        state = snapshot.get("state") or {}
+        guard = {
+            "ready": observation["ready"],
+            "guard_reason": reason,
+            "camera_received_at": (snapshot.get("camera") or {}).get("received_at"),
+            "state_received_at": state.get("received_at"),
+            "motion": state.get("data", {}).get("move"),
+        }
+        self.result["arrival_guard"] = guard
+        self.record("arrival_guard_checked", claim=self.arrival_claims, **guard)
+        # An ordinary obstacle is compatible with being safely stopped inside a
+        # room. Missing/stale sensors, unhealthy actuators and near-contact depth
+        # are not. Preserve this sample before waiting for any newer telemetry.
+        if reason not in (None, "obstacle") or (reason is None and not observation["ready"]):
+            raise RuntimeError(f"Arrival review stopped by guard: {reason or 'not_ready'}")
+
     async def review_arrival(self):
         """Test an arrival claim against fresh views, without giving the reviewer the claim."""
         self.arrival_claims += 1
@@ -615,6 +636,19 @@ class LiveMission:
         if self.recovery is not None:
             self.recovery["inspected"] = True
         review = await self.arrival_reviewer.review(self.goal, views)
+        self.result.update(arrival_review=review, arrival_images=references)
+        # Cloud review can outlive the observations it assessed. Check immediately
+        # so a transient fatal guard cannot disappear while awaiting the next frame,
+        # then require a new frame with stopped commands before accepting arrival.
+        observation = await self.robot.observe()
+        self.check_arrival_guard(self.transport.snapshot(), observation)
+        snapshot, observation = await fresh_observation(
+            self.robot,
+            self.transport,
+            time.monotonic(),
+            self.config.observation_timeout_s,
+        )
+        self.check_arrival_guard(snapshot, observation)
         accepted = (
             review.get("destination_visible") is True and review.get("inside_destination") is True
         )
@@ -625,7 +659,6 @@ class LiveMission:
             review=review,
             images=references,
         )
-        self.result.update(arrival_review=review, arrival_images=references)
         if accepted:
             self.result.update(status="goal_observed", reason=review["evidence"])
             return {"status": "goal_observed", "goal_verified": False, "arrival_review": review}
