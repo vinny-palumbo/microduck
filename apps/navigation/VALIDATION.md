@@ -9,7 +9,8 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 160 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The Python checks include
+- 189 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed before recovery review.
+  Subsequent targeted checks passed all 54 live-session and 30 guard tests. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -27,6 +28,13 @@ Current integration evidence:
 - Run `runs/20260916T220002Z-71bcf3a4` transcribed synthesized “Stop” audio and cancelled with
   zero actions and an acknowledged stop. This validates the actual model audio path, not a
   human microphone or physical-robot test.
+- Clear-start audio run `runs/20260916T220548Z-75954af4` travelled a net 1.149 m before an
+  obstacle stop. Exact-interval scoring of `voice-mission-002.truth.jsonl` found complete
+  coverage, no obstacle contacts, and no falls; the robot stopped outside the kitchen.
+  The model turned before confirming a doorway. Directional depth sectors, explicit doorway
+  inspection, and bounded refusal recovery were added afterward; the 0.35 m obstacle guard
+  remains unchanged. Recovery tests cover inspection, changed commands, readiness, retry
+  limits, and fatal sensor/health/stop failures.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

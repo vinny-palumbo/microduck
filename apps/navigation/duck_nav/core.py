@@ -244,11 +244,13 @@ class GuardedRobot:
             pos, quat = _vector(pose["pos"], 3), _unit(pose["quat"], 4)
             gravity = _unit(state["safety"]["gravity"], 3)
             axis = _rotate(quat, [1.0, 0.0, 0.0])
-            if axis[0] <= 0 or abs(math.atan2(axis[1], axis[0])) > math.radians(20):
-                return "head_not_forward", details
+            sensor_yaw = math.atan2(axis[1], axis[0])
             downward_axis = sum(a * g for a, g in zip(axis, gravity))
-            if abs(downward_axis) > math.sin(math.radians(35)):
-                return "head_not_forward", details
+            head_forward = (
+                axis[0] > 0
+                and abs(sensor_yaw) <= math.radians(20)
+                and abs(downward_axis) <= math.sin(math.radians(35))
+            )
             distances, statuses = depth["distance_mm"], depth["status"]
             if (
                 depth["rows"] != 8
@@ -261,22 +263,39 @@ class GuardedRobot:
             if above_floor <= 0:
                 return "invalid_pose", details
             known, floors, hits, too_close, central_unknown = 0, 0, [], False, False
+            sectors = {
+                name: {"known_zones": 0, "floor_zones": 0, "nearest_obstacle_m": None}
+                for name in ("left", "center", "right")
+            }
             for index, (mm, code, beam) in enumerate(zip(distances, statuses, self._beams)):
                 code = _number(code)
                 mm = _number(mm)
                 usable = code == 255 or (code in (5, 9) and mm > 0)
                 known += int(usable)
+                direction = _rotate(quat, beam)
+                bearing = math.atan2(direction[1], direction[0])
+                sector_name = (
+                    "left"
+                    if bearing > math.radians(7.5)
+                    else ("right" if bearing < -math.radians(7.5) else "center")
+                )
+                sector = sectors[sector_name]
+                sector["known_zones"] += int(usable)
                 if not usable and 2 <= index // 8 <= 5 and 2 <= index % 8 <= 5:
                     central_unknown = True
                 if code not in (5, 9) or mm <= 0:
                     continue
-                direction = _rotate(quat, beam)
                 downward = sum(d * g for d, g in zip(direction, gravity))
                 r = mm / 1000.0
                 if downward > 0 and r * downward >= above_floor * 0.85:
                     floors += 1
+                    sector["floor_zones"] += 1
                     continue
                 horizontal = r * math.sqrt(max(0.0, 1 - downward * downward))
+                nearest = sector["nearest_obstacle_m"]
+                sector["nearest_obstacle_m"] = (
+                    horizontal if nearest is None else min(nearest, horizontal)
+                )
                 if horizontal < 0.10:
                     # Kinematics marks this noise; a guard cannot treat it as free space.
                     too_close = True
@@ -286,7 +305,13 @@ class GuardedRobot:
                 "known_zones": known,
                 "floor_zones": floors,
                 "nearest_obstacle_m": min(hits) if hits else None,
+                "sectors": sectors,
+                "sector_frame": "trunk_left_center_right; null means no returned obstacle, not certified clearance",
+                "sensor_yaw_deg": math.degrees(sensor_yaw),
             }
+            # Side scans can inform planning, but never certify forward movement.
+            if not head_forward:
+                return "head_not_forward", details
             if too_close:
                 return "depth_too_close", details
             if hits and min(hits) <= self.config.obstacle_distance_m:

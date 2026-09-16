@@ -288,6 +288,227 @@ async def test_failed_motion_ends_without_second_attempt(tmp_path):
     assert robot.calls.count("advance") == 1
 
 
+class RecoveryRobot(Robot):
+    def __init__(self, failures, *, stop_acknowledged=True, keep_obstacle=False):
+        super().__init__()
+        self.failures = list(failures)
+        self.guard_reason = None
+        self.stop_acknowledged = stop_acknowledged
+        self.keep_obstacle = keep_obstacle
+
+    async def observe(self):
+        return {
+            **await super().observe(),
+            "ready": self.guard_reason is None,
+            "guard_reason": self.guard_reason,
+        }
+
+    async def advance(self, distance_m, heading_deg=0):
+        cause = self.failures.pop(0) if self.failures else None
+        if cause is None:
+            return await super().advance(distance_m, heading_deg)
+        self.calls.append("advance")
+        self.advance_entered.set()
+        self.guard_reason = (
+            cause if cause in {"obstacle", "head_not_forward", "depth_quality"} else None
+        )
+        return {
+            "completed": False,
+            "reason": cause,
+            "stop": {
+                "acknowledged": self.stop_acknowledged,
+                "physical_settling_verified": cause == "no_progress",
+            },
+        }
+
+    async def look_at(self, x, y, z):
+        result = await super().look_at(x, y, z)
+        self.guard_reason = "head_not_forward" if y else "obstacle" if self.keep_obstacle else None
+        return result
+
+
+async def test_recoverable_stop_inspect_recenter_then_alternative_movement(tmp_path):
+    session = Session()
+    robot = RecoveryRobot(["obstacle"])
+    sequence = iter(
+        [
+            ("advance", {"distance_m": 0.1, "heading_deg": 0, "reason": "Possible doorway"}),
+            (
+                "look_at",
+                {"x": 1, "y": -0.5, "z": 0, "reason": "Inspect floor through right opening"},
+            ),
+            ("look_at", {"x": 1, "y": 0, "z": 0, "reason": "Recenter before the clear arc"}),
+            (
+                "advance",
+                {"distance_m": 0.1, "heading_deg": -15, "reason": "Clear floor through doorway"},
+            ),
+            ("finish", {"status": "goal_observed", "reason": "Inside kitchen beside sink"}),
+        ]
+    )
+
+    async def next_call(_):
+        tool, args = next(sequence)
+        session.call(tool, **args)
+
+    async def response(response):
+        if response["name"] != "finish":
+            await next_call(None)
+
+    session.on_prompt, session.on_response = next_call, response
+    result, robot, _ = await run(tmp_path, session, robot, goal="Kitchen")
+    assert result["status"] == "goal_observed"
+    assert robot.calls == ["stop", "advance", "look_at", "look_at", "advance", "stop"]
+    first = session.responses[0]["function_responses"][0]["response"]
+    assert first["result"]["reason"] == "obstacle"
+    assert first["recovery"]["consecutive_refusals"] == 1
+    assert first["observation"]["ready"] is False
+    recovered = session.responses[3]["function_responses"][0]["response"]
+    assert recovered["observation"]["recovery"] is None
+
+
+async def recovery_mission(tmp_path, robot):
+    mission = LiveMission(
+        robot,
+        robot,
+        Session(),
+        Recorder(tmp_path),
+        audio=None,
+        goal="Kitchen",
+        config=LiveConfig(),
+        speak=None,
+        emit=lambda event: None,
+    )
+
+    async def no_image():
+        pass
+
+    mission.image = no_image
+    return mission
+
+
+@pytest.mark.parametrize("cause", ["obstacle", "head_not_forward", "depth_quality", "no_progress"])
+async def test_recoverable_refusals_require_inspection_and_have_finite_budget(tmp_path, cause):
+    robot = RecoveryRobot([cause])
+    mission = await recovery_mission(tmp_path, robot)
+    args = {"distance_m": 0.1, "reason": "Check route"}
+    first = await mission.execute_tool("advance", args)
+    assert first["recovery"]["remaining_refusals_before_stop"] == 2
+    # Changing arguments is not permission to skip inspection after a refusal.
+    second = await mission.execute_tool("advance", {**args, "heading_deg": 10})
+    assert second["result"]["reason"] == "recovery_inspection_required"
+    await mission.execute_tool("advance", {**args, "heading_deg": -10})
+    assert mission.result["status"] == "blocked"
+    assert mission.recoverable_failures == 3
+    assert robot.calls.count("advance") == 1
+
+
+async def test_same_failed_action_needs_cleared_guard_not_just_new_look(tmp_path):
+    robot = RecoveryRobot(["no_progress"])
+    mission = await recovery_mission(tmp_path, robot)
+    args = {"distance_m": 0.1, "reason": "Inspect route"}
+    await mission.execute_tool("advance", args)
+    await mission.execute_tool("look_at", {"x": 1, "y": 0, "z": 0, "reason": "Reassess floor"})
+    refused = await mission.execute_tool("advance", args)
+    assert refused["result"]["reason"] == "recovery_unchanged_action"
+    assert robot.calls.count("advance") == 1
+    result = await mission.execute_tool("advance", {**args, "heading_deg": 10})
+    assert result["result"]["completed"] is True
+    assert mission.recoverable_failures == 0
+
+
+async def test_inspection_cannot_override_current_obstacle_guard(tmp_path):
+    robot = RecoveryRobot(["obstacle"], keep_obstacle=True)
+    mission = await recovery_mission(tmp_path, robot)
+    args = {"distance_m": 0.1, "reason": "Possible doorway"}
+    await mission.execute_tool("advance", args)
+    await mission.execute_tool("look_at", {"x": 1, "y": 0, "z": 0, "reason": "Inspect wall"})
+    refused = await mission.execute_tool("advance", {**args, "heading_deg": 15})
+    assert refused["result"]["reason"] == "recovery_guard_not_ready"
+    assert refused["observation"]["ready"] is False
+    assert robot.calls.count("advance") == 1
+
+
+@pytest.mark.parametrize("guard_reason", ["depth_too_close", "stale_health", "unhealthy"])
+async def test_fatal_recovery_observation_is_preserved_even_if_it_clears(
+    tmp_path,
+    monkeypatch,
+    guard_reason,
+):
+    robot = RecoveryRobot(["obstacle"])
+    mission = await recovery_mission(tmp_path, robot)
+    args = {"distance_m": 0.1, "reason": "Possible doorway"}
+    await mission.execute_tool("advance", args)
+    mission.recovery["inspected"] = True
+    robot.guard_reason = guard_reason
+    original_observe = robot.observe
+
+    async def transient_observation():
+        observed = await original_observe()
+        robot.guard_reason = None
+        return observed
+
+    async def must_not_wait_for_another_observation(*args, **kwargs):
+        pytest.fail("A fatal guard must terminate after stop, before fresh observation")
+
+    robot.observe = transient_observation
+    monkeypatch.setattr("duck_nav.live.fresh_observation", must_not_wait_for_another_observation)
+    refused = await mission.execute_tool("advance", {**args, "heading_deg": 15})
+    assert refused["result"]["reason"] == guard_reason
+    assert refused["result"]["guard_reason"] == guard_reason
+    assert refused["result"]["fatal_guard"] is True
+    assert refused["result"]["retry_refused"] is False
+    assert refused["result"]["stop"]["acknowledged"] is True
+    assert mission.result["status"] == "blocked"
+    assert guard_reason in mission.result["reason"]
+    assert mission.recovery is None
+    assert robot.calls == ["advance", "stop"]
+
+
+@pytest.mark.parametrize("reported_reason", ["recovery_guard_not_ready", "obstacle"])
+async def test_retry_refused_flag_cannot_downgrade_a_fatal_guard(tmp_path, reported_reason):
+    robot = RecoveryRobot(["obstacle"])
+    mission = await recovery_mission(tmp_path, robot)
+    await mission.execute_tool("advance", {"distance_m": 0.1, "reason": "Possible doorway"})
+    # Even if a future retry path mislabels this response, classification must use
+    # its captured guard rather than the now-healthy observation.
+    robot.guard_reason = None
+    mission.movement_result(
+        {
+            "arguments": {"distance_m": 0.1},
+            "progress": {"negligible": True},
+            "result": {
+                "completed": False,
+                "reason": reported_reason,
+                "retry_refused": True,
+                "guard_reason": "depth_too_close",
+                "stop": {"acknowledged": True},
+            },
+        },
+        await robot.observe(),
+    )
+    assert mission.result["status"] == "blocked"
+    assert mission.recoverable_failures == 1
+
+
+@pytest.mark.parametrize(
+    "cause,acknowledged",
+    [
+        ("stale_health", True),
+        ("stale_camera", True),
+        ("disconnected", True),
+        ("cancelled", True),
+        ("obstacle", False),
+    ],
+)
+async def test_fatal_motion_failures_do_not_enter_recovery(tmp_path, cause, acknowledged):
+    robot = RecoveryRobot([cause], stop_acknowledged=acknowledged)
+    mission = await recovery_mission(tmp_path, robot)
+    await mission.execute_tool("advance", {"distance_m": 0.1, "reason": "Attempt route"})
+    assert mission.result["status"] == "blocked"
+    assert mission.recovery is None
+    assert robot.calls.count("advance") == 1
+
+
 async def test_action_budget_and_failed_stop_never_claim_arrival(tmp_path):
     session, robot = Session(), Robot()
 

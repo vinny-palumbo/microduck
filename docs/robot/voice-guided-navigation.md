@@ -140,14 +140,22 @@ movement; a completed, settled action does not promise an exact target pose. The
 uses the resulting camera image and odometry. Its walking command calibration is separate from
 the legacy `duck-nav move_for` and `duck-nav turn_by` limits documented in the bridge README.
 
+Depth observations include left, center, and right sectors in the robot's trunk frame, plus the
+sensor's current yaw. Side scans report what the sensor sees while keeping forward movement
+disabled until the head is recentered. Missing obstacle returns do not certify clear space.
+
 The model receives camera JPEGs at no more than one per second. A heartbeat asks it to continue an
 active task only after the preceding model turn completes. Session history and remembered places
 support exploration without a supplied floor plan. Place memory is saved in the recording, but
 is not automatically loaded into a later run.
 
-The model is instructed to enter the destination, not merely see it through a doorway. A failed
-or negligible movement ends the mission as blocked. Tool cancellation, lost transport, model
-failure, exhausted budgets, and operator cancellation use the existing
+The model is instructed to enter the destination, not merely see it through a doorway. An
+acknowledged obstacle, gaze, or depth-quality stop permits bounded replanning: inspect the route,
+recenter the camera, and advance only after the guard is ready. Repeating a failed command also
+requires a cleared obstruction; otherwise the action must change. Three consecutive refusals
+end the mission. Negligible movement permits the same recovery only after physical settling is
+verified. Stale sensors, health failures, and unacknowledged stops end the mission immediately.
+Tool cancellation, lost transport, model failure, exhausted budgets, and operator cancellation use the existing
 [stop guard](../../apps/navigation/README.md#guard-contract).
 
 | Option | Default |
@@ -178,10 +186,13 @@ After the mission ends, score the independent simulator log from the first termi
 ```sh
 scripts/duck-sim down
 cd ~/Pollen/microduck_rl
-uv run python -m mjlab_microduck.sim.navigation_eval "$evaluation_dir/truth.jsonl"
+uv run python -m mjlab_microduck.sim.mission_eval "$evaluation_dir/truth.jsonl" \
+  /absolute/path/to/the/printed/navigation/run
 ```
 
 Keep the score, model recording, and initial simulator placement together. The scorer verifies
-the duck's position and settled arrival using simulator truth; the model does not receive that
+the duck's position and settled arrival within the exact mission interval using simulator truth.
+It also checks recorded obstacle contacts, falls, stop acknowledgement, and the model's claim.
+The model does not receive that
 information. A successful replayed speech test, a successful live-microphone test, and successful
 physical-robot navigation are distinct evidence and should be reported separately.

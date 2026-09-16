@@ -173,6 +173,20 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("robot.enable", [call[0] for call in self.transport.calls])
         json.dumps(await self.robot.observe(), allow_nan=False)
 
+    async def test_depth_sectors_locate_obstacles_without_weakening_guard(self):
+        self.transport.depth["status"] = [255] * 64
+        for row in range(3):
+            for col in range(3):
+                index = row * 8 + col
+                self.transport.depth["status"][index] = 5
+                self.transport.depth["distance_mm"][index] = 250
+        observation = await self.robot.observe()
+        self.assertEqual(observation["guard_reason"], "obstacle")
+        sectors = observation["depth_summary"]["sectors"]
+        self.assertLess(sectors["left"]["nearest_obstacle_m"], 0.3)
+        self.assertIsNone(sectors["right"]["nearest_obstacle_m"])
+        self.assertEqual(sectors["right"]["known_zones"], 24)
+
     async def test_invalid_inputs_never_issue_commands(self):
         for speed, duration in [
             (-0.1, 1),
@@ -197,6 +211,24 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.robot.look_at(*point)
         self.assertEqual(self.transport.pulses, [])
+
+    async def test_side_scan_reports_depth_but_cannot_authorize_motion(self):
+        angle = math.radians(45)
+        self.transport.state["frames"]["tof"]["quat"] = [
+            math.cos(angle / 2),
+            0,
+            0,
+            math.sin(angle / 2),
+        ]
+        observation = await self.robot.observe()
+        self.assertFalse(observation["ready"])
+        self.assertEqual(observation["guard_reason"], "head_not_forward")
+        depth = observation["depth_summary"]
+        self.assertAlmostEqual(depth["sensor_yaw_deg"], 45)
+        self.assertEqual(depth["sectors"]["left"]["known_zones"], 64)
+        self.assertEqual(depth["sectors"]["right"]["known_zones"], 0)
+        self.assertEqual((await self.robot.move_for(0.1, 0.1))["reason"], "head_not_forward")
+        self.assertEqual(self.transport.moving_pulses(), [])
 
     async def test_all_frozen_streams_refuse_motion(self):
         # A frozen source can still be delivered by the network: its trusted
