@@ -46,7 +46,8 @@ decision receives the current image, up to two recent side views, guarded sensor
 actual recent actions, and remembered observations. Images carry measured camera angles in the
 body frame so a sideways view cannot be mistaken for the body's forward direction. Earlier
 views expire after 30 seconds, 2.5 cm of body displacement, 5° of body rotation, or a dispatched
-walking action. Current sensor guards remain authoritative. Once a goal is accepted, the loop
+walking action. Older scans are presented first and the current image last. Current sensor
+guards remain authoritative. Once a goal is accepted, the loop
 keeps taking guarded steps while the speech
 session listens for cancellation; continuing does not require another spoken or model request.
 Use `--visual-planner streaming` to compare the original mode, where the streaming model chooses

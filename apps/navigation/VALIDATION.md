@@ -131,6 +131,18 @@ Current integration evidence:
   Standard navigation also stops after 12 nonbody decisions without completed measured walking
   progress. Tests cover budget exhaustion, progress resets, arrival review, cancellation at the
   last scan slot, and failed final stop acknowledgement. Route completion remains unproven.
+- Run `runs/20260916T232413Z-a5960bcf` stopped blocked after 15 calls and 102.7 s, with
+  0.711 m net displacement. All 1,027 exact-interval samples had valid coverage and no contacts
+  or falls. The planner again treated an unidentified side room as a kitchen candidate.
+  Independent image-only reviews of the front/right scans before the wrong turns in runs 009
+  and 010 both rejected kitchen identity. This distinguishes the navigator's unsupported
+  interpretation from identifiable destination evidence; it does not supply a route.
+- A four-call comparison on the same 010 input found no output truncation or missing reasoning:
+  ER 2 used 838 thought tokens by default and 553 with explicit high reasoning in these samples.
+  Flash 3.8 was more cautious about room identity but took 24.8 s. These single samples do not
+  establish model superiority. Camera parts now follow acquisition order, with prior scans
+  oldest-first and the current image last; 149 planner tests passed for the payload change.
+  Model settings and movement guards remain unchanged.
 - An offline 24-trial pure-yaw screen used the unchanged policy and navigation scene at the
   clear starting pose, commands of ±0.5/±0.8 rad/s for 1/2/3 seconds, and two repetitions.
   Active yaw excursions of 3.6–9.1° returned to within 0.63° after settling; final translation

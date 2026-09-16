@@ -141,7 +141,8 @@ def test_stateless_payload_has_one_current_image_and_explicit_context():
     assert len(model.declarations) == 5
 
 
-def test_labeled_stationary_views_preserve_order_and_current_guard_authority():
+@pytest.mark.parametrize("reverse_prior_order", [False, True])
+def test_prior_views_are_chronological_and_current_view_is_last(reverse_prior_order):
     current = context(camera=camera(), ready=False, guard_reason="obstacle")
     views = [
         {
@@ -170,19 +171,21 @@ def test_labeled_stationary_views_preserve_order_and_current_guard_authority():
             "jpeg": jpeg("blue"),
         },
     ]
+    if reverse_prior_order:
+        views.reverse()
     original = copy.deepcopy((current, views))
     payload = planner().payload(current, JPEG, views=views)
     parts = payload["contents"][0]["parts"]
     assert len(parts) == 7
     assert json.loads(parts[0]["text"]) == current
-    assert json.loads(parts[1]["text"]) == {"view": "current", "camera": current["camera"]}
-    assert base64.b64decode(parts[2]["inlineData"]["data"]) == JPEG
-    for index, view in enumerate(views):
-        assert json.loads(parts[3 + index * 2]["text"]) == {
+    assert json.loads(parts[-2]["text"]) == {"view": "current", "camera": current["camera"]}
+    assert base64.b64decode(parts[-1]["inlineData"]["data"]) == JPEG
+    for index, view in enumerate(sorted(views, key=lambda view: view["camera"]["received_at"])):
+        assert json.loads(parts[1 + index * 2]["text"]) == {
             "view": "prior_stationary_scan",
             "camera": view["camera"],
         }
-        assert base64.b64decode(parts[4 + index * 2]["inlineData"]["data"]) == view["jpeg"]
+        assert base64.b64decode(parts[2 + index * 2]["inlineData"]["data"]) == view["jpeg"]
     assert (current, views) == original
     instruction = payload["systemInstruction"]["parts"][0]["text"]
     assert "relative to the BODY, not the camera" in instruction
@@ -425,8 +428,10 @@ async def test_http_passes_validated_supplemental_images(monkeypatch):
         "name"
     ] == "advance"
     parts = sent["json"]["contents"][0]["parts"]
-    assert json.loads(parts[3]["text"])["camera"] == views[0]["camera"]
-    assert base64.b64decode(parts[4]["inlineData"]["data"]) == views[0]["jpeg"]
+    assert json.loads(parts[1]["text"])["camera"] == views[0]["camera"]
+    assert base64.b64decode(parts[2]["inlineData"]["data"]) == views[0]["jpeg"]
+    assert json.loads(parts[-2]["text"]) == {"view": "current", "camera": camera()}
+    assert base64.b64decode(parts[-1]["inlineData"]["data"]) == JPEG
 
 
 @pytest.mark.asyncio

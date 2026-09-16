@@ -49,6 +49,8 @@ FORBIDDEN_KEYS = frozenset(
 SYSTEM = """Plan one next action for a Microduck's already accepted navigation goal.
 Use the current camera image, measured action results, depth, and remembered observations.
 Up to two labeled prior images may accompany the current image as recent stationary scans.
+Prior scans appear oldest first. The final labeled image is CURRENT: use that latest view
+with the current ready state and depth when deciding the next action.
 Current camera metadata describes the measured optical direction in the trunk frame:
 yaw_deg is positive left, pitch_deg is positive up. The image center may point sideways.
 An unknown current camera direction is explicitly null; do not infer it from a prior view.
@@ -226,12 +228,8 @@ class GeminiVisualPlanner:
             encoded = json.dumps(context, allow_nan=False)
         except (ValueError, TypeError):
             raise ValueError("visual planning context must contain finite JSON data") from None
-        parts = [
-            {"text": encoded},
-            {"text": json.dumps({"view": "current", "camera": camera}, allow_nan=False)},
-            _image_part(jpeg),
-        ]
-        for view in views:
+        parts = [{"text": encoded}]
+        for view in sorted(views, key=lambda view: view["camera"]["received_at"]):
             parts.extend(
                 [
                     {
@@ -243,6 +241,14 @@ class GeminiVisualPlanner:
                     _image_part(view["jpeg"]),
                 ]
             )
+        # Keep every label beside its own unchanged JPEG. The latest observation
+        # comes last so the temporal order matches the robot's acquisition order.
+        parts.extend(
+            [
+                {"text": json.dumps({"view": "current", "camera": camera}, allow_nan=False)},
+                _image_part(jpeg),
+            ]
+        )
         return {
             "systemInstruction": {"parts": [{"text": SYSTEM}]},
             "contents": [
