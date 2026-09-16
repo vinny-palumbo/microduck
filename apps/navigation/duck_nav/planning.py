@@ -27,6 +27,7 @@ CONTEXT_KEYS = frozenset(
         "arrival_review",
         "arrival_claims",
         "camera",
+        "progress_budget",
     }
 )
 CAMERA_KEYS = frozenset(
@@ -63,6 +64,13 @@ Give concrete visible-scene evidence in reason when the selected tool has that p
 
 Find actual doorways with visible clear floor continuing through them. Flat walls, colored
 panels, plain rectangles and dark areas alone do not prove an opening or identify appliances.
+While a corridor continues visibly clear, prefer following it and inspecting side entrances
+over turning into an unidentified side room. Prefer a route with destination-specific visible
+evidence. Floor color and a generic box or cabinet do not identify a kitchen; keep such a room
+as an unconfirmed candidate. A prior action reason calling it the kitchen is only a hypothesis.
+If no confirmed destination is visible and the corridor ends, inspect and explore a genuine
+unvisited opening. Choose the opening's clear floor, leaving margin from both jambs, not the
+nearest colored panel. Do not begin a large turn merely because a distant opening is sideways.
 Inspect left and right before substantial heading changes, then recenter before moving.
 look_at uses trunk metres: x forward, y left, z up. Before the first body action and after
 looking sideways, recenter with look_at(x=1,y=0,z=0). Positive heading_deg steers left.
@@ -83,6 +91,9 @@ recenter, and choose a visibly clear alternative. Stale sensors, unhealthy contr
 stops, or no safe alternative require finish(blocked). Acknowledged commands do not prove
 physical progress. Use measured results and images; inspect no-progress actions instead of
 repeating them. Remember observed places and avoid revisiting the same blocked route.
+progress_budget bounds decisions without measured body progress. Head scans and remembering
+places do not reset it. After inspecting both sides and recentering, if the obstacle guard
+remains blocked and no safe movement exists, finish blocked instead of repeating the scan.
 
 Seeing the destination through a doorway is not arrival. finish(goal_observed) requires
 visible evidence that the camera is inside the destination. Describe what is actually

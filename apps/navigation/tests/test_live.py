@@ -1326,6 +1326,8 @@ async def test_autonomous_rejected_arrival_continues_with_review_context(tmp_pat
     assert robot.calls.count("advance") == 1
     assert planner.contexts[1]["arrival_claims"] == 1
     assert planner.contexts[1]["arrival_review"]["inside_destination"] is False
+    assert planner.contexts[1]["progress_budget"]["observations_without_progress"] == 1
+    assert planner.contexts[2]["progress_budget"]["observations_without_progress"] == 0
     outcomes = [
         json.loads(line)
         for line in (recorder.path / "events.jsonl").read_text().splitlines()
@@ -1567,6 +1569,133 @@ async def test_autonomous_action_budget_bounds_visual_steps(tmp_path, fast_image
     assert result["actions"] == result["navigation_actions"] == 2
     assert robot.calls == ["stop", "advance", "advance", "stop"]
     assert len(planner.contexts) == 2
+
+
+@pytest.mark.parametrize("tool", ["look_at", "remember_place", "observe"])
+async def test_observation_budget_stops_repeated_successful_scans(tmp_path, fast_images, tool):
+    arguments = {
+        "look_at": {"x": 1, "y": 0, "z": 0, "reason": "Inspect clear floor"},
+        "remember_place": {"name": "hall", "observation": "A wall", "explored": True},
+        "observe": {"reason": "Reassess the view"},
+    }
+    planner = VisualPlanner(
+        [{"name": tool, "args": arguments[tool]}] * 12
+        + [{"name": "advance", "args": {"distance_m": 0.1, "reason": "Must not dispatch"}}]
+    )
+    result, robot, _ = await run(tmp_path, Session(), goal="Kitchen", navigation_planner=planner)
+    assert result["status"] == "blocked"
+    assert result["reason"].startswith("Observation budget exhausted")
+    assert result["progress_budget"] == {
+        "observations_without_progress": 12,
+        "limit": 12,
+        "remaining": 0,
+    }
+    assert result["navigation_actions"] == len(planner.contexts) == 12
+    assert [context["progress_budget"]["remaining"] for context in planner.contexts] == list(
+        range(12, 0, -1)
+    )
+    assert "advance" not in robot.calls
+    assert robot.calls[-1] == "stop"
+    assert result["stop"]["completed"] is True
+
+
+@pytest.mark.parametrize("completed, displacement", [(True, 0.001), (False, 0.1)])
+async def test_uncompleted_or_negligible_advance_cannot_reset_observation_budget(
+    tmp_path, fast_images, completed, displacement
+):
+    class NoProgressRobot(Robot):
+        async def advance(self, distance_m, heading_deg=0):
+            self.calls.append("advance")
+            self.distance += displacement
+            return {
+                "completed": completed,
+                "reason": "distance_reached" if completed else "obstacle",
+                "stop": {"acknowledged": True, "physical_settling_verified": True},
+            }
+
+    observation = {"name": "observe", "args": {"reason": "Inspect floor"}}
+    planner = VisualPlanner(
+        [observation] * 11
+        + [{"name": "advance", "args": {"distance_m": 0.1, "reason": "Visible floor"}}]
+        + [observation]
+    )
+    result, robot, _ = await run(
+        tmp_path, Session(), NoProgressRobot(), goal="Kitchen", navigation_planner=planner
+    )
+    assert result["status"] == "blocked"
+    assert result["reason"].startswith("Observation budget exhausted")
+    assert result["navigation_actions"] == 13
+    assert planner.contexts[-1]["progress_budget"]["observations_without_progress"] == 11
+    assert result["progress_budget"]["observations_without_progress"] == 12
+    assert robot.calls == ["stop", "advance", "stop"]
+
+
+async def test_measured_completed_advance_resets_scan_budget_and_preserves_arrival(
+    tmp_path, fast_images
+):
+    observation = {"name": "observe", "args": {"reason": "Inspect floor"}}
+    planner = VisualPlanner(
+        [observation] * 11
+        + [{"name": "advance", "args": {"distance_m": 0.1, "reason": "Visible floor"}}]
+        + [observation] * 11
+        + [{"name": "finish", "args": {"status": "goal_observed", "reason": "Inside kitchen"}}]
+    )
+    result, robot, _ = await run(
+        tmp_path,
+        Session(),
+        goal="Kitchen",
+        navigation_planner=planner,
+        arrival_reviewer=ArrivalReviewer([True]),
+    )
+    assert result["status"] == "goal_observed"
+    assert result["navigation_actions"] == 24
+    assert planner.contexts[11]["progress_budget"]["observations_without_progress"] == 11
+    assert planner.contexts[12]["progress_budget"]["observations_without_progress"] == 0
+    assert result["progress_budget"]["observations_without_progress"] == 11
+    assert robot.distance == 0.1
+    assert robot.calls[-1] == "stop"
+
+
+async def test_budget_exhaustion_still_requires_acknowledged_final_stop(tmp_path, fast_images):
+    class FailedStopRobot(Robot):
+        async def look_at(self, x, y, z):
+            outcome = await super().look_at(x, y, z)
+            if self.calls.count("look_at") == 12:
+                self.stop_ok = False
+            return outcome
+
+    planner = VisualPlanner(
+        [{"name": "look_at", "args": {"x": 1, "y": 0, "z": 0, "reason": "Inspect"}}] * 12
+    )
+    result, _, _ = await run(
+        tmp_path, Session(), FailedStopRobot(), goal="Kitchen", navigation_planner=planner
+    )
+    assert result["status"] == "error"
+    assert result["reason"] == "Final stop was not acknowledged"
+    assert result["progress_budget"]["remaining"] == 0
+
+
+async def test_voice_stop_wins_while_last_scan_is_pending(tmp_path, fast_images):
+    robot, session = Robot(), Session()
+    entered = asyncio.Event()
+
+    class LastScanPlanner(VisualPlanner):
+        async def decide(self, context, jpeg, *, views=None):
+            if context["progress_budget"]["remaining"] == 1:
+                entered.set()
+                await asyncio.Event().wait()
+            return await super().decide(context, jpeg, views=views)
+
+    planner = LastScanPlanner([{"name": "observe", "args": {"reason": "Inspect"}}] * 12)
+    task = asyncio.create_task(
+        run(tmp_path, session, robot, goal="Kitchen", navigation_planner=planner)
+    )
+    await asyncio.wait_for(entered.wait(), 1)
+    session.push({"server_content": {"input_transcription": {"text": "Stop"}}})
+    result, _, _ = await asyncio.wait_for(task, 0.5)
+    assert result["status"] == "cancelled"
+    assert result["progress_budget"]["observations_without_progress"] == 11
+    assert robot.calls == ["stop", "stop"]
 
 
 async def test_delayed_voice_reply_cannot_cancel_last_allowed_visual_step(tmp_path, fast_images):

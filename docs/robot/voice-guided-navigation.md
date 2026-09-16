@@ -186,6 +186,9 @@ recenter the camera, and advance only after the guard is ready. Repeating a fail
 requires a cleared obstruction; otherwise the action must change. Three consecutive refusals
 end the mission. Negligible movement permits the same recovery only after physical settling is
 verified. Stale sensors, health failures, and unacknowledged stops end the mission immediately.
+Standard navigation also stops after 12 visual observation or memory decisions without completed,
+measured walking progress. Head movements do not reset this budget. The planner receives the
+remaining budget so repeated scans of an unchanged obstruction end promptly.
 Tool cancellation, lost transport, model failure, exhausted budgets, and operator cancellation use the existing
 [stop guard](../../apps/navigation/README.md#guard-contract).
 

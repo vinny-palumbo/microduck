@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 472 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 487 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -112,6 +112,25 @@ Current integration evidence:
   the mission. Standard mode now uses bounded PCM segmentation; legacy streaming mode retains
   server activity detection. These tests establish audio behavior, not interruption of actual
   motion; the simulator diagnostic must still be rerun after this change.
+- The follow-up moving-simulator test passed in `runs/20260916T232048Z-3b66e8d4` with the
+  unchanged short “Stop” WAV. Playback began during a model-selected nonzero walking command;
+  read-only body samples measured 0.0512 m displacement during the active command. Transcription
+  arrived 1.133 s after playback began, followed by mission cancellation at 1.148 s. The stop
+  was acknowledged, requested commands were zero, and applied commands fell below 0.001.
+  This validates interruption of actual simulated walking through the audio API, while leaving
+  microphone/noise robustness, emergency-stop latency, and physical settling unclaimed.
+- Run `runs/20260916T231422Z-c5b93a9c` again chose an unidentified side room and stopped blocked
+  after 34 calls and 252.9 s. Exact scoring of `voice-mission-009.truth.jsonl` found 0.868 m net
+  displacement, complete coverage, no collisions or falls, and no arrival. Repeated head scans
+  did not change the physical obstruction. This motivates a bounded observation budget and
+  preferring a clear corridor over assigning a room identity from floor color or generic boxes.
+- With the corridor preference, three provider replays of 009's original wrong-turn input
+  selected a further camera inspection instead of the original 0.20 m/−30° right arc.
+  The recorded robot context, image bytes, and results are in that run's
+  `step11-current-prompt-replay.json`; no route or expected answer was supplied to the model.
+  Standard navigation also stops after 12 nonbody decisions without completed measured walking
+  progress. Tests cover budget exhaustion, progress resets, arrival review, cancellation at the
+  last scan slot, and failed final stop acknowledgement. Route completion remains unproven.
 - An offline 24-trial pure-yaw screen used the unchanged policy and navigation scene at the
   clear starting pose, commands of ±0.5/±0.8 rad/s for 1/2/3 seconds, and two repetitions.
   Active yaw excursions of 3.6–9.1° returned to within 0.63° after settling; final translation

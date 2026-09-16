@@ -25,6 +25,7 @@ from .navigation import GaitNavigator
 from .transport import WebRtcRobot
 
 DEFAULT_MODEL = "gemini-robotics-er-2-streaming-preview"
+OBSERVATION_ACTION_LIMIT = 12
 RECOVERABLE_GUARD_REASONS = frozenset({"obstacle", "head_not_forward", "depth_quality"})
 SYSTEM = """You control a Microduck using live first-person camera images and user speech.
 Your job is to carry out a spoken destination instruction, such as 'go to the kitchen',
@@ -410,6 +411,7 @@ class LiveMission:
         self.navigation_busy = False
         self.actions = 0
         self.navigation_actions = 0
+        self.observations_without_progress = 0
         self.history = []
         self.places = {}
         self.transcript = ""
@@ -492,12 +494,20 @@ class LiveMission:
         context["recovery"] = copy.deepcopy(self.recovery)
         context["arrival_review"] = self.result.get("arrival_review")
         context["arrival_claims"] = self.arrival_claims
+        context["progress_budget"] = self.progress_budget()
         context["camera"] = copy.deepcopy(observation.get("camera_view"))
         if context["camera"] is not None:
             context["camera"]["age_s"] = max(
                 0.0, time.monotonic() - context["camera"]["received_at"]
             )
         return context
+
+    def progress_budget(self):
+        return {
+            "observations_without_progress": self.observations_without_progress,
+            "limit": OBSERVATION_ACTION_LIMIT,
+            "remaining": max(0, OBSERVATION_ACTION_LIMIT - self.observations_without_progress),
+        }
 
     async def recovery_refusal(self, arguments):
         """Do not dispatch another body command until the last refusal was reassessed."""
@@ -1060,10 +1070,29 @@ class LiveMission:
             self.record(
                 "tool_finished", step=step, tool="navigate", result=result, source="navigation"
             )
+            if self.done.is_set():
+                return
             if (
                 result.get("navigation_tool") == "finish" and not result.get("continue_navigation")
             ) or self.result["status"] == "blocked":
                 self.done.set()
+                return
+            if result.get("navigation_tool") == "advance":
+                if (
+                    result.get("result", {}).get("completed") is True
+                    and result.get("progress", {}).get("negligible") is False
+                ):
+                    self.observations_without_progress = 0
+            else:
+                # Only the autonomous worker owns this budget. Head motion, memory,
+                # repeated observations and a rejected arrival claim do not establish
+                # body progress. Arrival review's internal scans count as one decision.
+                self.observations_without_progress += 1
+            if self.observations_without_progress >= OBSERVATION_ACTION_LIMIT:
+                self.finish(
+                    "blocked",
+                    "Observation budget exhausted: 12 visual actions without measured body progress",
+                )
                 return
             # Give incoming speech and connection events a chance to stop the next
             # action, even when a test/fast planner completes without suspending.
@@ -1139,6 +1168,7 @@ class LiveMission:
                 stop=stopped,
                 actions=self.actions,
                 navigation_actions=self.navigation_actions,
+                progress_budget=self.progress_budget(),
                 elapsed_s=time.monotonic() - self.started,
                 model=DEFAULT_MODEL,
                 navigation_model=self.navigation_model,
