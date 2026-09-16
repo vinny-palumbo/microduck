@@ -17,8 +17,8 @@ runs, unchanged and unable to tell. `tofd --sim` gets its 8×8 depth frames from
 `mediad --sim-camera` gets a rendered head-camera image, mounted a quarter turn off like the real one.
 
 The MuJoCo half lives in [`microduck_rl`](https://github.com/pollen-robotics/microduck_rl) as
-`duck-body`: one process, one window, N duck bodies in one scene, with the BAM actuator models the
-policies were trained against.
+`duck-body`: one process, one window, N duck bodies in one scene. Motor behavior and its remaining
+limits are documented in [the simulation design](../design/simulation.md#7-what-it-is-and-is-not-a-twin-of).
 
 **What it is good for:** anything in the daemons and their clients — IPC, `robotctl`, the console,
 the updater, the chorale, policies standing and walking, mapping. **What it cannot tell you:**

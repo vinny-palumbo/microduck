@@ -1,0 +1,27 @@
+[
+  {
+    "tool": "move_for",
+    "arguments": {
+      "speed_m_s": 0.05,
+      "duration_s": 0.5
+    },
+    "reason": "Fixture: measure a guarded forward attempt."
+  },
+  {
+    "tool": "look_at",
+    "arguments": {
+      "x": 1,
+      "y": 0,
+      "z": 0
+    },
+    "reason": "Fixture: center gaze."
+  },
+  {
+    "tool": "move_for",
+    "arguments": {
+      "speed_m_s": 0.05,
+      "duration_s": 0.5
+    },
+    "reason": "Fixture: measure a guarded forward attempt."
+  }
+]

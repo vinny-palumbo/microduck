@@ -1,8 +1,9 @@
-# Guarded navigation bridge
+# Guarded visual-agent prototype
 
-This is the first navigation milestone: observe a simulated Microduck and execute short,
-checked actions through the same WebRTC session used by a robot. It does not yet choose a route,
-recognize a kitchen, or call a language model. The JSON tools are the boundary for that next step.
+This prototype accepts a typed goal, sends a fresh camera image to one model, executes one
+guarded action through WebRTC, and reassesses with the result and a new image. It tests visual
+decisions and honest blocked/stuck reporting. Reliable room navigation is not demonstrated;
+the current gait produces little settled movement.
 
 Run from this checkout: the transport reuses `spaces/policy-shop/lan.py` and
 `spaces/shared/control.py`. This is not a standalone wheel for distribution.
@@ -77,6 +78,84 @@ Each finished action records the result and current state/depth/camera metadata.
 sensor observations, not simulator ground-truth coordinates or room labels. Use `--runs-dir`
 to choose another location. Recordings are ignored by git.
 
+## Run a visual mission
+
+The first adapter uses [Gemini Robotics ER 2](https://ai.google.dev/gemini-api/docs/generate-content/robotics-overview)
+through the [generateContent API](https://ai.google.dev/api/generate-content#FunctionDeclaration).
+Each decision sends the typed goal, one JPEG, robot odometry,
+depth summary and up to eight recent actions/results to Google. No simulator ground-truth
+coordinates or room labels enter the planner. Each request is independent and returns exactly
+one function call. Parallel calls, unknown tools, malformed arguments and truncated responses
+end the mission with a stop request.
+
+On Windows/WSL, save the key once in Windows Credential Manager from an interactive terminal:
+
+```sh
+uv run duck-agent-key save
+uv run duck-agent-key status
+uv run duck-agent "Look around and describe what prevents you from moving toward the kitchen"
+```
+
+`save` prompts with hidden input, stores a generic credential named `Pollen/Microduck/Gemini`
+for the current Windows user on this computer, and verifies it by reading it back. Repeating
+`save` updates that same entry. `status` reports presence only. The agent automatically loads
+this entry when neither `GEMINI_API_KEY` nor `GOOGLE_API_KEY` is set; those environment variables
+remain supported and take precedence in that order. Other Linux/macOS installations use the
+environment variables. Scripted runs never read credentials.
+
+The WSL bridge requires Windows interop and `powershell.exe` on PATH. It uses Windows
+[CredWrite/CredRead](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew)
+with local-machine persistence scoped to your Windows user. The key crosses captured process
+pipes, not command-line arguments, and is not written to source files, recordings or shell
+profiles. Windows Credential Manager protects it at rest; programs running as your Windows
+user can retrieve it. This is not isolation from other programs running as you.
+
+To manage or remove the saved entry, open **Credential Manager -> Windows Credentials ->
+Generic Credentials -> Pollen/Microduck/Gemini**. Removing it prevents automatic loading;
+an environment variable, if set, still overrides the vault.
+
+For an environment-only session instead:
+
+```sh
+read -rsp 'Gemini API key: ' GEMINI_API_KEY; printf '\n'
+export GEMINI_API_KEY
+uv run duck-agent "Describe the current view and finish without moving"
+unset GEMINI_API_KEY
+```
+
+Use `--model` to select a compatible model, `--host`/`--port` for the WebRTC endpoint, and
+`--runs-dir` for recordings. Defaults are 12 decisions and 120 seconds; `--max-steps` and
+`--max-seconds` allow at most 30 decisions and 300 seconds. Each model request has a 30-second
+timeout. Ctrl-C cancels the mission and requests stop. Existing tool bounds remain unchanged;
+the adapter cannot enable motors or bypass guards.
+
+A fresh frame with zero requested and near-zero applied commands is required before each
+model decision. This checks command settling, not physical stillness. After movement, the
+agent measures net odometry displacement/rotation. Two consecutive movement attempts that
+fail or produce less than 5 mm forward displacement / 1 degree of turn end the run as `blocked`.
+The model is instructed to recenter before its first body action and finish blocked after the
+first failed/negligible body action; the two-attempt cutoff is a local fallback if it does not.
+Intervening looks or observations do not reset that count. These conservative prototype
+thresholds detect ineffective commands; they are not a calibrated distance controller.
+
+Recordings include images, observations, decisions/reasons, action results, estimated progress
+and `mission.json`. `goal_observed` is explicitly the model's assessment, with
+`goal_verified: false`; it is not independently scored arrival. Exit 0 means that assessment,
+2 means blocked/budget/mission failure, 1 means setup failure, and 130 means operator interruption.
+
+Without a key, exercise the same loop using clearly labelled fixtures:
+
+```sh
+uv run duck-agent "Inspect the room" --scripted examples/inspect.json
+uv run duck-agent "Try a short forward move and report if stuck" --scripted examples/stuck.json
+```
+
+The first checks gaze/observation/finish plumbing; the second exercises negligible-progress
+handling on the current simulator gait. Expected exit is 2 for these blocked outcomes.
+`model: scripted-fixture` in the recording identifies these as plumbing tests, not evidence
+of visual understanding. The [validation record](VALIDATION.md) distinguishes them from live
+model testing.
+
 ## Guard contract
 
 - Forward motion is limited to 0.10 m/s and 2 seconds per call. Reverse and sideways movement
@@ -105,7 +184,7 @@ error and simultaneous controllers need further work before autonomous use on ha
 
 ```sh
 uv run pytest
-uv run ruff check duck_nav tests
+uv run ruff check duck_nav tests scripts
 ```
 
 Tests exercise refusal paths, cancellation, connection failures and stale observations without
@@ -123,8 +202,44 @@ The daemon slews applied velocity, so the live check requires exactly zero reque
 and applied velocity below 0.001 within two seconds. A tool's stop acknowledgement alone means
 the daemon accepted the intent; it does not establish physical settling.
 
-The next milestone is a model adapter that receives `observe`, calls these tools, and records
-its decisions until it identifies and enters the kitchen. First calibrate the short-turn
-tracking limitation documented in [the validation record](VALIDATION.md). Then start with one model and score
-arrival independently using simulator ground truth; voice and persistent room memory can then
-build on that measured loop.
+## Measure turn accuracy
+
+Restart the flat simulator using the startup command above to reset placement and persistent
+head commands. Then run:
+
+```sh
+uv run python scripts/calibrate_turns.py --label baseline --repeats 2
+```
+
+The benchmark requests left/right 5°, 15°, and 30° turns through the ordinary guarded action.
+It reads ground truth from the local MuJoCo body endpoint (port 7801) for evaluation only;
+the controller still sees WebRTC observations. It records the configured policy's SHA-256,
+guard settings, initial posture, before/after frames, timestamped commands, odometry and true
+heading in `runs/*/events.jsonl`, with a summary in `turns.json`. Repeats run sequentially;
+they do not teleport/reset the duck between trials.
+
+The score compares 0.3-second mean headings before the action and after a two-second wait.
+A trial passes only if the action completed, stop was acknowledged, final heading error is
+within 2° (1.25° for a 5° request), heading variation in the last window is at most 0.5°,
+odometry agrees with truth within 0.5°, and the final requested/applied yaw command is zero
+/ below 0.001 rad/s. These are benchmark acceptance criteria, not hardware safety guarantees.
+Exit status is 0 for a passing battery, 1 for failed accuracy, and 2 for a guard/stop abort.
+Connection or recording errors also exit nonzero. Partial summaries set `complete: false`.
+
+For gait diagnosis, simulator-only rate probes are also available:
+
+```sh
+uv run python scripts/calibrate_turns.py --label response --probe-rates 0.6 -0.6 1 -1
+```
+
+Probe mode retains sensor, depth, health and deadman checks, but replaces the normal turn's
+angle-command budget and no-progress cutoff with a two-second duration cap and a stop request
+at 25° measured excursion. Rates are capped at 1 rad/s; stopping can still overshoot. Probe
+results have no target-angle pass/fail score, and a successful exit only means the diagnostic
+finished. These rates are not exposed by `turn_by`. Any guard abort ends the battery.
+
+The [validation record](VALIDATION.md) fails the turn acceptance criteria. Keep this benchmark
+as a separate locomotion diagnostic; precision turns do not gate testing the visual-agent loop.
+Improve locomotion only through a separately scoped investigation. Do not enlarge guard limits
+or retrain a policy simply to make a visual-agent demo appear successful. Reliable arrival will
+need demonstrable movement and independent scoring when that milestone is attempted.
