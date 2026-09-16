@@ -280,3 +280,28 @@ A battery passes only if all three reach the distance cutoff, settled travel is 
 It aborts after a guard refusal or excessive settled heading change; exit 1 means failure.
 `forward-summary.json` and frame/event recordings retain the evidence. These initial
 acceptance thresholds are diagnostic, not sufficient certification for navigation.
+
+## Trace where heading drift develops
+
+Restart the flat simulator **before every trial**, then run one of:
+
+```sh
+uv run python scripts/trace_forward.py --posture neutral
+uv run python scripts/trace_forward.py --posture recentered
+```
+
+Use at least three trials per posture, alternating order. Each invocation runs one forward
+probe with the same bounds as the forward diagnostic and saves `trace.json` plus roughly
+50 Hz samples in `events.jsonl`. Samples contain simulator yaw/position, odometry,
+requested/applied velocity, head commands, measured joints and IMU angular velocity.
+Simulator truth is used only for scoring. The recording includes the policy hash and guard
+configuration; it requires the local body endpoint before issuing commands.
+
+The summary splits net heading change into the first 0.5 seconds, the remainder of the
+action, and post-action settling (mean of the final 0.3 seconds of a two-second wait).
+Action end is the tool's return after requesting stop; it is not the instant physical motion
+ends. Angles are unwrapped before phase attribution. The split is a diagnostic convention,
+not a detected gait-phase boundary. Exit 0 means the trace was recorded, not accurate walking.
+Inspect cutoff, guard outcome, sample gaps and final zero commands alongside the heading values.
+Different cutoff times and the extra recentering operation limit causal comparisons between
+postures; these small batteries locate drift but do not isolate individual gait parameters.

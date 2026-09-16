@@ -356,6 +356,59 @@ Next locomotion work should diagnose heading drift and command-to-settled-motion
 using this reproducible benchmark before enabling a faster model action. Successful gaze
 alone does not establish reliable room navigation.
 
+## Heading drift phase traces
+
+Six independent probes used the same flat scene and deployed policy, restarting the simulator
+before **every** trial. Order was neutral, recentered, recentered, neutral, neutral, recentered.
+Each probe retained ordinary guards, a 0.30 m/s command, 1.5-second budget, 50 mm odometry
+cutoff and 10-degree heading cutoff. `scripts/trace_forward.py` records the full time series
+and scores simulator truth separately from the controller. The policy SHA-256 was unchanged.
+
+Heading changes in degrees (positive/negative are opposite yaw directions):
+
+| Run under `runs/` | Posture | First 0.5 s | Rest of action | After action | Settled total |
+|---|---|---:|---:|---:|---:|
+| `20260916T193359Z-1b39eb86` | neutral | -1.4 | +4.3 | -9.5 | -6.6 |
+| `20260916T193421Z-67ebb72a` | recentered | -1.7 | -5.4 | +6.3 | -0.8 |
+| `20260916T193445Z-d4a8665e` | recentered | -1.6 | -3.0 | -8.3 | -12.9 |
+| `20260916T193506Z-8d7063b9` | neutral | -1.7 | -0.9 | +5.1 | +2.5 |
+| `20260916T193527Z-4adf2e59` | neutral | -1.5 | +6.4 | -3.9 | +1.0 |
+| `20260916T193547Z-50fc1e9c` | recentered | -1.9 | -8.4 | -4.7 | -15.0 |
+
+The first 0.5 seconds contributed a consistent small negative rotation (about 1.4-1.9 degrees).
+Larger rotation developed later and through stopping. Post-action heading change ranged from
+-9.5 to +6.3 degrees and sometimes reversed the earlier drift. Thus the drift is not merely
+a fixed steering offset during forward travel. Both postures exhibit it; recentered trials
+were worse overall in this small battery, so posture may still influence it.
+
+All requested and applied yaw-rate samples were exactly zero. Forward applied velocity
+continued decaying after stop: in the first four traces it was about 0.021-0.026 m/s after
+0.25 seconds and 0.001-0.002 m/s after 0.5 seconds. Most post-action rotation occurred in the
+first second. This is evidence of substantial gait/settling dynamics around the stop transition,
+not proof that command smoothing alone is the cause. Dependence on gait phase is a plausible
+explanation, not isolated by these measurements. There is no outer heading-hold correction
+in the forward primitive.
+
+Final requested commands were zero, applied commands were below 0.001, and stop was acknowledged
+in every trial. Final 0.3-second heading variation was below 0.10 degrees. Maximum sample gaps
+were below 0.030 seconds; simulation ran approximately in real time. Travel ranged from 51.5 to
+66.9 mm. The last recentered trial hit the heading cutoff yet settled near -15 degrees, again
+showing that a cutoff does not bound the final rotation. Guarded cutoffs changed action duration
+(about 1.11-1.53 seconds), and recentering changes preparation timing as well as posture, so this
+battery cannot assign causality to a particular joint, foot contact or filter setting.
+
+The immediate control target is the full move-and-settle behavior: a heading controller that
+only watches the active command would miss a substantial source of error. Before choosing a
+controller or changing training, characterize whether bounded yaw corrections remain effective
+through deceleration; the existing turn benchmark already shows weak low-rate response.
+No policy, actuator, gait setting or navigation speed limit changed in this investigation.
+
+Validation: 99 Python tests plus 9 subtests passed; Ruff passed. New scoring regressions verify
+phase attribution across the +/- pi wrap boundary and reject traces without a baseline.
+Raw samples and camera snapshots are retained in each run's `events.jsonl`; `trace.json`
+contains the phase summary. These ignored recordings are local evidence; the script, tests
+and this numeric summary are committed for reproducibility.
+
 ## Remaining limits
 
 - The turn calibration above fails. The bridge reports incomplete turns and does not
