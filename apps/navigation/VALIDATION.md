@@ -1,5 +1,38 @@
 # Navigation and visual-agent validation
 
+## Voice branch integration — 2026-09-16
+
+The `voice-guided-navigation` branch starts at fork default `main` (`fead66b`),
+then selectively ports the tested observation/gaze foundation. The matching RL branch starts
+at fork default `develop` (`cb70b79`). Historical results below remain the record of the earlier
+prototype; they do not establish completion of the current voice-navigation objective.
+
+Current integration evidence:
+
+- 160 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The Python checks include
+  audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
+  guard failures during motion/settling, and action-lock cleanup after broken telemetry.
+- The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
+  persistent Live API configuration using the saved credential.
+- Real WebRTC/daemon/MuJoCo walking arcs agreed with independent truth: requested 0.10 m/+20°
+  produced 0.0981 m/+14.47°; 0.10 m/−20° produced 0.1021 m/−25.03°; 0.15 m/0° produced
+  0.1488 m/−11.56°. Odometry and truth differed by less than 0.6 mm/0.08°. All settled, but
+  the third action correctly reported `target_reached: false`. Raw calibration records:
+  `runs/20260916T215014Z-22087ab5`, `20260916T215045Z-4207ca43`, `20260916T215056Z-5a08dcc4`.
+- Live audio run `runs/20260916T215552Z-7042f8bf` transcribed a synthesized WAV saying
+  “Go to the kitchen,” accepted the goal, looked forward, and executed two walking actions.
+  It terminated blocked at an obstacle; simulator truth confirms no arrival. An offline
+  contact audit found a cube beside the selected starting foot position, confounding its
+  unexpected steering response. That placement must not be used to select controller gains.
+- Run `runs/20260916T220002Z-71bcf3a4` transcribed synthesized “Stop” audio and cancelled with
+  zero actions and an acknowledged stop. This validates the actual model audio path, not a
+  human microphone or physical-robot test.
+
+Full visual exploration and kitchen arrival are still under development. All runtime navigation
+decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
+
+## Earlier guarded prototype
+
 Validated in WSL Ubuntu with one headless Microduck in `apartment_flat`. This record covers
 the observation/action foundation, scripted agent loop and one live visual inspection.
 It does not establish autonomous kitchen navigation or physical hardware readiness.

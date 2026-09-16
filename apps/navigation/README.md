@@ -1,6 +1,14 @@
-# Guarded visual-agent prototype
+# Navigation bridge
 
-This prototype accepts a typed goal, sends a fresh camera image to one model, executes one
+## Live voice navigation
+
+The [`duck-voice` workflow](../../docs/robot/voice-guided-navigation.md) owns setup and usage for
+spoken destination instructions, a persistent camera/audio session, and the `advance` walking
+tool; the tools below are the earlier guarded visual-agent prototype.
+
+## Legacy guarded visual-agent prototype
+
+The `duck-agent` prototype accepts a typed goal, sends a fresh camera image to one model, executes one
 guarded action through WebRTC, and reassesses with the result and a new image. It tests visual
 decisions and honest blocked/stuck reporting. Reliable room navigation is not demonstrated;
 the default bounded commands produce little settled movement. Higher-speed simulator probes
@@ -159,6 +167,10 @@ of visual understanding. The [validation record](VALIDATION.md) distinguishes th
 model testing.
 
 ## Guard contract
+
+The sensor, gaze, and stop checks below underpin both runners. The first two movement limits
+apply to the legacy `move_for` and `turn_by` tools; live `duck-voice` uses the separate
+[`advance` walking layer](../../docs/robot/voice-guided-navigation.md#what-the-model-can-do).
 
 - Forward motion is limited to 0.10 m/s and 2 seconds per call. Reverse and sideways movement
   are unavailable because the forward sensor does not observe those directions.

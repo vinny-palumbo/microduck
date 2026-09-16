@@ -20,6 +20,7 @@ docs give the reasoning and point at it.
 | [`cheatsheet-dev.md`](robot/cheatsheet-dev.md) | The commands that need a dev board: branch builds, candidates, dev pushes. |
 | [`dev-push.md`](robot/dev-push.md) | Build on your machine and install on the board over ssh, with no CI run. |
 | [`simulation.md`](robot/simulation.md) | The simulated duck: `scripts/duck-sim`, the real daemons against a MuJoCo body, one duck or several in containers. |
+| [`voice-guided-navigation.md`](robot/voice-guided-navigation.md) | The live voice navigation workflow: spoken goals, camera-guided exploration, microphone selection, and run evidence. |
 | [`duckctl.md`](robot/duckctl.md) | Every `duckctl` command — the robot from a laptop, over Bluetooth. |
 | [`install-dev.md`](robot/install-dev.md) | Setting up a board for development, from nothing. |
 | [`install-by-hand.md`](robot/install-by-hand.md) | The same install as separate commands, for testing one step at a time. |
@@ -81,6 +82,6 @@ thinking is not lost and does not get mistaken for a decision.
 | | |
 |---|---|
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Building, testing, repo layout, conventions, releasing. |
-| [`../apps/navigation/README.md`](../apps/navigation/README.md) | The simulator navigation bridge: WebRTC observations, bounded actions, guards and recordings. |
+| [`../apps/navigation/README.md`](../apps/navigation/README.md) | Navigation bridge guards and the legacy visual-agent tools; live voice usage is owned by `robot/voice-guided-navigation.md`. |
 | [`project/npu-bringup.md`](project/npu-bringup.md) | The duck detector on the RK3566's NPU: what runs, how to benchmark it, and the frame path that is still missing. |
 | [`../deploy/README.md`](../deploy/README.md) | What a robot image is configured with, and what provisioning actually does. |

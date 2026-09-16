@@ -629,6 +629,25 @@ async def run_live(
     ).run()
 
 
+def emit_console(event):
+    """Keep the terminal readable; the recorder retains full sensor/action evidence."""
+    if event.get("event") == "tool_finished":
+        detail = event["result"]
+        outcome = detail.get("result", detail)
+        event = {
+            "event": event["event"],
+            "step": event["step"],
+            "tool": event["tool"],
+            **{
+                key: outcome[key]
+                for key in ("completed", "reason", "distance_m", "heading_deg")
+                if key in outcome
+            },
+            **({"progress": detail["progress"]} if "progress" in detail else {}),
+        }
+    print(json.dumps(event, allow_nan=False), flush=True)
+
+
 async def run(args):
     from google import genai
 
@@ -669,7 +688,7 @@ async def run(args):
                 goal=args.goal,
                 config=config,
                 speak=speak_local if args.tts == "local" else None,
-                emit=lambda event: print(json.dumps(event, allow_nan=False), flush=True),
+                emit=emit_console,
             )
         return 0 if result["status"] == "goal_observed" else 2
     finally:
