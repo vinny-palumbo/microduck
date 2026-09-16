@@ -3,10 +3,12 @@
 import asyncio
 import base64
 import copy
+import io
 import json
 
 import aiohttp
 import pytest
+from PIL import Image
 
 from duck_nav.live import declarations
 from duck_nav.planning import ALLOWED_TOOLS, GeminiVisualPlanner
@@ -14,6 +16,30 @@ from duck_nav.planning import ALLOWED_TOOLS, GeminiVisualPlanner
 
 def planner():
     return GeminiVisualPlanner("secret", declarations())
+
+
+def jpeg(color="black", *, format="JPEG"):
+    output = io.BytesIO()
+    Image.new("RGB", (8, 8), color).save(output, format=format)
+    return output.getvalue()
+
+
+JPEG = jpeg()
+
+
+def camera(**changes):
+    return {
+        "label": "front",
+        "yaw_deg": 0.0,
+        "pitch_deg": 0.0,
+        "received_at": 100.0,
+        "state_received_at": 99.99,
+        "age_s": 0.0,
+        "view_id": "frame-0001",
+        "body_position_delta_m": 0.0,
+        "body_heading_delta_deg": 0.0,
+        **changes,
+    }
 
 
 def context(**changes):
@@ -89,7 +115,7 @@ def test_live_declarations_convert_to_filtered_http_tools():
     original = declarations()
     saved = copy.deepcopy(original)
     model = GeminiVisualPlanner("secret", original)
-    payload = model.payload(context(), b"image")
+    payload = model.payload(context(), JPEG)
     tools = payload["tools"][0]["functionDeclarations"]
     assert {tool["name"] for tool in tools} == ALLOWED_TOOLS
     assert all(set(tool) == {"name", "description", "parametersJsonSchema"} for tool in tools)
@@ -101,33 +127,176 @@ def test_live_declarations_convert_to_filtered_http_tools():
 
 def test_stateless_payload_has_one_current_image_and_explicit_context():
     model = planner()
-    first = model.payload(context(goal="kitchen"), b"old")
-    second = model.payload(context(goal="bedroom"), b"new")
+    old, new = jpeg("red"), jpeg("blue")
+    first = model.payload(context(goal="kitchen"), old)
+    second = model.payload(context(goal="bedroom"), new)
     assert len(second["contents"]) == 1
     parts = second["contents"][0]["parts"]
-    assert len(parts) == 2
+    assert len(parts) == 3
     assert json.loads(parts[0]["text"]) == context(goal="bedroom")
-    assert base64.b64decode(parts[1]["inlineData"]["data"]) == b"new"
+    assert json.loads(parts[1]["text"]) == {"view": "current", "camera": None}
+    assert base64.b64decode(parts[2]["inlineData"]["data"]) == new
     assert "kitchen" not in parts[0]["text"]
     first["tools"][0]["functionDeclarations"].clear()
     assert len(model.declarations) == 5
 
 
+def test_labeled_stationary_views_preserve_order_and_current_guard_authority():
+    current = context(camera=camera(), ready=False, guard_reason="obstacle")
+    views = [
+        {
+            "camera": camera(
+                label="left",
+                yaw_deg=44.0,
+                received_at=80.0,
+                state_received_at=79.99,
+                age_s=20.0,
+                view_id="frame-left",
+                body_position_delta_m=0.01,
+                body_heading_delta_deg=2.0,
+            ),
+            "jpeg": jpeg("red"),
+        },
+        {
+            "camera": camera(
+                label="right",
+                yaw_deg=-45.0,
+                pitch_deg=2.0,
+                received_at=90.0,
+                state_received_at=89.99,
+                age_s=10.0,
+                view_id="frame-right",
+            ),
+            "jpeg": jpeg("blue"),
+        },
+    ]
+    original = copy.deepcopy((current, views))
+    payload = planner().payload(current, JPEG, views=views)
+    parts = payload["contents"][0]["parts"]
+    assert len(parts) == 7
+    assert json.loads(parts[0]["text"]) == current
+    assert json.loads(parts[1]["text"]) == {"view": "current", "camera": current["camera"]}
+    assert base64.b64decode(parts[2]["inlineData"]["data"]) == JPEG
+    for index, view in enumerate(views):
+        assert json.loads(parts[3 + index * 2]["text"]) == {
+            "view": "prior_stationary_scan",
+            "camera": view["camera"],
+        }
+        assert base64.b64decode(parts[4 + index * 2]["inlineData"]["data"]) == view["jpeg"]
+    assert (current, views) == original
+    instruction = payload["systemInstruction"]["parts"][0]["text"]
+    assert "relative to the BODY, not the camera" in instruction
+    assert "Prior scans never override the current ready state or current depth" in instruction
+    assert "does not clear a physical obstacle" in instruction
+
+
+@pytest.mark.parametrize("camera_value", [None, camera()])
+def test_current_camera_can_be_known_or_explicitly_unknown(camera_value):
+    parts = planner().payload(context(camera=camera_value), JPEG)["contents"][0]["parts"]
+    assert json.loads(parts[1]["text"])["camera"] == camera_value
+
+
+@pytest.mark.parametrize("placement", ["current", "prior"])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"label": "back"},
+        {"label": None},
+        {"view_id": ""},
+        {"view_id": " "},
+        {"view_id": 1},
+        {"view_id": "x" * 201},
+        {"yaw_deg": float("nan")},
+        {"pitch_deg": float("inf")},
+        {"received_at": float("-inf")},
+        {"state_received_at": 10**1000},
+        {"received_at": -1.0},
+        {"state_received_at": -0.01},
+        {"age_s": -0.01},
+        {"age_s": 30.01},
+        {"body_position_delta_m": -0.001},
+        {"body_position_delta_m": 0.0251},
+        {"body_heading_delta_deg": -5.01},
+        {"body_heading_delta_deg": 5.01},
+        {"yaw_deg": "0.0"},
+        {"age_s": False},
+        {"image_path": "/tmp/local.jpg"},
+        {"ground_truth": {"room": "kitchen"}},
+    ],
+)
+def test_invalid_camera_metadata_is_rejected_in_every_image(placement, changes):
+    metadata = camera(**changes)
+    with pytest.raises(ValueError):
+        if placement == "current":
+            planner().payload(context(camera=metadata), JPEG)
+        else:
+            planner().payload(context(), JPEG, views=[{"camera": metadata, "jpeg": JPEG}])
+
+
+@pytest.mark.parametrize("missing", list(camera()))
+@pytest.mark.parametrize("placement", ["current", "prior"])
+def test_camera_metadata_requires_all_fields(missing, placement):
+    metadata = camera()
+    del metadata[missing]
+    with pytest.raises(ValueError, match="camera metadata requires exactly"):
+        if placement == "current":
+            planner().payload(context(camera=metadata), JPEG)
+        else:
+            planner().payload(context(), JPEG, views=[{"camera": metadata, "jpeg": JPEG}])
+
+
+@pytest.mark.parametrize(
+    "views",
+    [
+        "frame.jpg",
+        {},
+        (),
+        [None],
+        [{}],
+        [{"jpeg": JPEG}],
+        [{"camera": None, "jpeg": JPEG}],
+        [{"camera": camera()}],
+        [{"camera": camera(), "jpeg": JPEG, "path": "/tmp/private.jpg"}],
+        [{"camera": camera(), "jpeg": JPEG}] * 3,
+    ],
+)
+def test_prior_views_fail_closed_on_missing_unknown_or_excess_data(views):
+    with pytest.raises(ValueError):
+        planner().payload(context(), JPEG, views=views)
+
+
+@pytest.mark.parametrize("value", [None, [], "front"])
+def test_prior_camera_cannot_have_unknown_orientation(value):
+    with pytest.raises(ValueError):
+        planner().payload(context(), JPEG, views=[{"camera": value, "jpeg": JPEG}])
+
+
+@pytest.mark.parametrize("heading_delta", [-5.0, 5.0])
+def test_stationary_scan_bounds_are_inclusive(heading_delta):
+    view = {
+        "camera": camera(
+            age_s=30.0, body_position_delta_m=0.025, body_heading_delta_deg=heading_delta
+        ),
+        "jpeg": JPEG,
+    }
+    assert len(planner().payload(context(), JPEG, views=[view])["contents"][0]["parts"]) == 5
+
+
 @pytest.mark.parametrize("extra", ["state", "simulator_truth", "map", "target_coordinates"])
 def test_unknown_context_is_rejected(extra):
     with pytest.raises(ValueError, match="unexpected visual planning context"):
-        planner().payload(context(**{extra: "do not send"}), b"image")
+        planner().payload(context(**{extra: "do not send"}), JPEG)
 
 
 @pytest.mark.parametrize("key", ["simulator_truth", "ground_truth", "qpos", "qvel"])
 def test_nested_raw_truth_is_rejected(key):
     with pytest.raises(ValueError, match="simulator truth is forbidden"):
-        planner().payload(context(recent_actions=[{"result": {key: [1, 2, 3]}}]), b"image")
+        planner().payload(context(recent_actions=[{"result": {key: [1, 2, 3]}}]), JPEG)
 
 
 def test_tuple_cannot_hide_serializable_truth():
     with pytest.raises(ValueError, match="simulator truth is forbidden"):
-        planner().payload(context(recent_actions=({"simulator_truth": [1, 2, 3]},)), b"image")
+        planner().payload(context(recent_actions=({"simulator_truth": [1, 2, 3]},)), JPEG)
 
 
 @pytest.mark.parametrize(
@@ -136,13 +305,17 @@ def test_tuple_cannot_hide_serializable_truth():
 )
 def test_malformed_context_is_rejected(changes):
     with pytest.raises(ValueError):
-        planner().payload(context(**changes), b"image")
+        planner().payload(context(**changes), JPEG)
 
 
-@pytest.mark.parametrize("image", [None, "not bytes", b""])
-def test_invalid_image(image):
+@pytest.mark.parametrize("image", [None, "not bytes", b"", b"image", jpeg(format="PNG"), JPEG[:50]])
+@pytest.mark.parametrize("placement", ["current", "prior"])
+def test_invalid_image(image, placement):
     with pytest.raises(ValueError):
-        planner().payload(context(), image)
+        if placement == "current":
+            planner().payload(context(), image)
+        else:
+            planner().payload(context(), JPEG, views=[{"camera": camera(), "jpeg": image}])
 
 
 @pytest.mark.parametrize(
@@ -236,7 +409,7 @@ def test_provider_must_return_one_complete_tool(failure):
 @pytest.mark.asyncio
 async def test_http_contract(monkeypatch):
     sent = install_http(monkeypatch)
-    assert (await planner().decide(context(), b"image"))["name"] == "advance"
+    assert (await planner().decide(context(), JPEG))["name"] == "advance"
     assert sent["url"].endswith("/gemini-robotics-er-2-preview:generateContent")
     assert "secret" not in sent["url"]
     assert sent["headers"] == {"x-goog-api-key": "secret"}
@@ -245,10 +418,30 @@ async def test_http_contract(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_http_passes_validated_supplemental_images(monkeypatch):
+    sent = install_http(monkeypatch)
+    views = [{"camera": camera(label="left", yaw_deg=45.0), "jpeg": jpeg("red")}]
+    assert (await planner().decide(context(camera=camera()), JPEG, views=views))[
+        "name"
+    ] == "advance"
+    parts = sent["json"]["contents"][0]["parts"]
+    assert json.loads(parts[3]["text"])["camera"] == views[0]["camera"]
+    assert base64.b64decode(parts[4]["inlineData"]["data"]) == views[0]["jpeg"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_prior_image_fails_before_network(monkeypatch):
+    sent = install_http(monkeypatch)
+    with pytest.raises(ValueError, match="valid JPEG"):
+        await planner().decide(context(), JPEG, views=[{"camera": camera(), "jpeg": b"invalid"}])
+    assert sent == {}
+
+
+@pytest.mark.asyncio
 async def test_http_error_never_reads_body(monkeypatch):
     sent = install_http(monkeypatch, status=403)
     with pytest.raises(RuntimeError, match="^Gemini visual planning HTTP 403$"):
-        await planner().decide(context(), b"image")
+        await planner().decide(context(), JPEG)
     assert "read_body" not in sent
 
 
@@ -257,7 +450,7 @@ async def test_http_error_never_reads_body(monkeypatch):
 async def test_transport_errors_are_redacted(monkeypatch, error):
     install_http(monkeypatch, error=error)
     with pytest.raises((RuntimeError, TimeoutError)) as caught:
-        await planner().decide(context(), b"image")
+        await planner().decide(context(), JPEG)
     assert "secret" not in str(caught.value)
 
 
@@ -265,11 +458,11 @@ async def test_transport_errors_are_redacted(monkeypatch, error):
 async def test_invalid_json_is_redacted(monkeypatch):
     install_http(monkeypatch, json_error=ValueError("secret body"))
     with pytest.raises(ValueError, match="^invalid Gemini visual planning response$"):
-        await planner().decide(context(), b"image")
+        await planner().decide(context(), JPEG)
 
 
 @pytest.mark.asyncio
 async def test_cancellation_propagates(monkeypatch):
     install_http(monkeypatch, error=asyncio.CancelledError())
     with pytest.raises(asyncio.CancelledError):
-        await planner().decide(context(), b"image")
+        await planner().decide(context(), JPEG)

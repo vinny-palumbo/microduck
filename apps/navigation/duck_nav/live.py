@@ -19,6 +19,7 @@ from PIL import Image
 from .agent import fresh_observation, progress, visual_context
 from .audio import microphone_chunks, speak_local, wav_chunks
 from .cli import TOOLS, Recorder, dispatch
+from .core import _number, _rotate, _unit, _vector
 from .credentials import load_gemini_key
 from .navigation import GaitNavigator
 from .transport import WebRtcRobot
@@ -125,6 +126,127 @@ def _jpeg(snapshot):
     buffer = io.BytesIO()
     picture.save(buffer, format="JPEG", quality=85)
     return buffer.getvalue()
+
+
+def _angle_delta_degrees(left, right):
+    return math.degrees(math.atan2(math.sin(left - right), math.cos(left - right)))
+
+
+class StationaryViews:
+    """Keep at most three measured gaze directions at one nearby body pose."""
+
+    max_age_s = 30.0
+    max_position_delta_m = 0.025
+    max_heading_delta_deg = 5.0
+    distinct_yaw_deg = 15.0
+
+    def __init__(self, recorder):
+        self.recorder = recorder
+        self.views = []
+        self.count = 0
+
+    def clear(self):
+        self.views.clear()
+
+    @staticmethod
+    def pose(snapshot):
+        odometry = snapshot["state"]["data"]["odom"]
+        return _vector(odometry["position"], 3), _number(odometry["yaw"])
+
+    def retain(self, snapshot, jpeg, *, max_skew_s=0.15):
+        """Record exact planner bytes; unknown orientation must never become a scan label."""
+        self.count += 1
+        view_id = f"view-{self.count:05d}"
+        path = self.recorder.path / f"{view_id}.jpg"
+        path.write_bytes(jpeg)
+        try:
+            camera_at = _number(snapshot["camera"]["received_at"])
+            state_at = _number(snapshot["state"]["received_at"])
+            if abs(camera_at - state_at) > max_skew_s:
+                raise ValueError("camera pose and image are not synchronized")
+            quaternion = _unit(snapshot["state"]["data"]["frames"]["camera"]["quat"], 4)
+            optical = _rotate(quaternion, [0.0, 0.0, 1.0])
+            yaw = math.degrees(math.atan2(optical[1], optical[0]))
+            pitch = math.degrees(math.atan2(optical[2], math.hypot(*optical[:2])))
+            pose = self.pose(snapshot)
+            camera = {
+                "view_id": view_id,
+                "label": "left" if yaw > 20 else "right" if yaw < -20 else "front",
+                "yaw_deg": yaw,
+                "pitch_deg": pitch,
+                "received_at": camera_at,
+                "state_received_at": state_at,
+                "age_s": max(0.0, time.monotonic() - camera_at),
+                "body_position_delta_m": 0.0,
+                "body_heading_delta_deg": 0.0,
+            }
+            if camera["age_s"] > self.max_age_s:
+                raise ValueError("camera view is too old")
+        except (KeyError, TypeError, ValueError, IndexError):
+            self.clear()
+            return None, str(path.resolve())
+        # A later image of the same gaze direction replaces its older sample.
+        # Keeping three distinct headings preserves front/left/right across scans.
+        self.prune(snapshot)
+        self.views = [
+            view
+            for view in self.views
+            if abs(_angle_delta_degrees(math.radians(view["camera"]["yaw_deg"]), math.radians(yaw)))
+            >= self.distinct_yaw_deg
+        ]
+        self.views.append(
+            {"camera": camera, "jpeg": jpeg, "pose": pose, "image_path": str(path.resolve())}
+        )
+        self.views = self.views[-3:]
+        return copy.deepcopy(camera), str(path.resolve())
+
+    def prune(self, snapshot):
+        try:
+            position, yaw = self.pose(snapshot)
+        except (KeyError, TypeError, ValueError, IndexError):
+            self.clear()
+            return
+        now, retained = time.monotonic(), []
+        for view in self.views:
+            old_position, old_yaw = view["pose"]
+            distance = math.dist(position[:2], old_position[:2])
+            angle = _angle_delta_degrees(yaw, old_yaw)
+            age = now - view["camera"]["received_at"]
+            if (
+                0 <= age <= self.max_age_s
+                and distance <= self.max_position_delta_m
+                and abs(angle) <= self.max_heading_delta_deg
+            ):
+                view["camera"].update(
+                    age_s=age,
+                    body_position_delta_m=distance,
+                    body_heading_delta_deg=angle,
+                )
+                retained.append(view)
+        self.views = retained
+
+    def prior(self, snapshot, current_camera):
+        self.prune(snapshot)
+        if current_camera is None:
+            return [], []
+        selected = [
+            view
+            for view in self.views
+            if abs(
+                _angle_delta_degrees(
+                    math.radians(view["camera"]["yaw_deg"]),
+                    math.radians(current_camera["yaw_deg"]),
+                )
+            )
+            >= self.distinct_yaw_deg
+        ][-2:]
+        return (
+            [{"camera": copy.deepcopy(view["camera"]), "jpeg": view["jpeg"]} for view in selected],
+            [
+                {"camera": copy.deepcopy(view["camera"]), "image_path": view["image_path"]}
+                for view in selected
+            ],
+        )
 
 
 def is_spoken_stop(text: str) -> bool:
@@ -292,6 +414,7 @@ class LiveMission:
         self.arrival_reviewer = arrival_reviewer
         self.arrival_claims = 0
         self.navigation_planner = navigation_planner
+        self.stationary_views = StationaryViews(recorder)
         self.navigation_model = (
             getattr(navigation_planner, "model", "injected-visual-planner")
             if navigation_planner is not None
@@ -332,14 +455,21 @@ class LiveMission:
             # the selected frame, after throttling and before the network send can
             # yield; its clearance must describe the image accompanying the result.
             observation = await self.robot.observe()
-            await self.session.send_realtime_input(
-                video={"data": _jpeg(snapshot), "mime_type": "image/jpeg"}
+            jpeg = _jpeg(snapshot)
+            camera_view, image_path = self.stationary_views.retain(
+                snapshot,
+                jpeg,
+                max_skew_s=getattr(self.robot.config, "sensor_skew_s", 0.15),
             )
+            observation = {**observation, "camera_view": camera_view, "image_path": image_path}
+            await self.session.send_realtime_input(video={"data": jpeg, "mime_type": "image/jpeg"})
             self.last_image = time.monotonic()
             self.recorder.write(
                 {
                     "event": "live_observation",
                     "observation": self.recorder.capture(snapshot),
+                    "camera_view": camera_view,
+                    "image_path": image_path,
                 }
             )
             return snapshot, observation
@@ -357,6 +487,11 @@ class LiveMission:
         context["recovery"] = copy.deepcopy(self.recovery)
         context["arrival_review"] = self.result.get("arrival_review")
         context["arrival_claims"] = self.arrival_claims
+        context["camera"] = copy.deepcopy(observation.get("camera_view"))
+        if context["camera"] is not None:
+            context["camera"]["age_s"] = max(
+                0.0, time.monotonic() - context["camera"]["received_at"]
+            )
         return context
 
     async def recovery_refusal(self, arguments):
@@ -694,10 +829,18 @@ class LiveMission:
                 self.config.observation_timeout_s,
             )
             snapshot, observation = await self.image()
+            context = self.context(observation)
+            views, references = self.stationary_views.prior(snapshot, context["camera"])
+            self.record(
+                "visual_views_selected",
+                step=step,
+                current={"camera": context["camera"], "image_path": observation["image_path"]},
+                previous=references,
+            )
             # The voice model's explanation is not input to the visual planner. Only
             # the original goal, selected observations and actual action history are.
             decision = await asyncio.wait_for(
-                self.navigation_planner.decide(self.context(observation), _jpeg(snapshot)),
+                self.navigation_planner.decide(context, _jpeg(snapshot), views=views),
                 self.config.model_timeout_s,
             )
             if self.done.is_set():
@@ -791,6 +934,9 @@ class LiveMission:
                 # for new sensors that could hide a transient fatal condition.
                 return {**decision, "result": result}
             if result is None:
+                # Even an interrupted or refused body dispatch invalidates old gaze
+                # views; subsequent planning must use newly measured stationary views.
+                self.stationary_views.clear()
                 result = await self.robot.advance(**decision["arguments"])
         else:
             result = await dispatch(self.robot, {"tool": name, "arguments": decision["arguments"]})

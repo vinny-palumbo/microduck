@@ -1,8 +1,8 @@
 # Voice-guided navigation
 
 `duck-voice` listens for an instruction such as “go to the kitchen,” sends the duck's camera
-and microphone to Gemini Robotics ER 2, and keeps choosing short guarded actions in one
-conversation until it reports arrival, becomes blocked, or is stopped. This page owns the
+and microphone to Gemini Robotics ER 2, and keeps choosing short guarded actions until it
+reports arrival, becomes blocked, or is stopped. This page owns the
 live voice workflow. The [navigation bridge README](../../apps/navigation/README.md#guard-contract)
 owns the sensor, gaze, and stop guards; [the simulator guide](simulation.md) owns simulator setup.
 
@@ -41,8 +41,12 @@ speech program, described below.
 
 The default `--visual-planner standard` uses the streaming session for spoken instructions and
 cancellation, then runs an autonomous visual loop with the standard ER 2 endpoint. Each
-decision receives the current image, guarded sensor context, actual recent actions, and remembered
-observations. Once a goal is accepted, the loop keeps taking guarded steps while the speech
+decision receives the current image, up to two recent side views, guarded sensor context,
+actual recent actions, and remembered observations. Images carry measured camera angles in the
+body frame so a sideways view cannot be mistaken for the body's forward direction. Earlier
+views expire after 30 seconds, 2.5 cm of body displacement, 5° of body rotation, or a dispatched
+walking action. Current sensor guards remain authoritative. Once a goal is accepted, the loop
+keeps taking guarded steps while the speech
 session listens for cancellation; continuing does not require another spoken or model request.
 Use `--visual-planner streaming` to compare the original mode, where the streaming model chooses
 the physical actions itself. Both modes use the same movement guards and arrival reviewer.
@@ -156,10 +160,11 @@ Depth observations include left, center, and right sectors in the robot's trunk 
 sensor's current yaw. Side scans report what the sensor sees while keeping forward movement
 disabled until the head is recentered. Missing obstacle returns do not certify clear space.
 
-The model receives camera JPEGs at no more than one per second. A heartbeat asks it to continue an
-active task only after the preceding model turn completes. Session history and remembered places
-support exploration without a supplied floor plan. Place memory is saved in the recording, but
-is not automatically loaded into a later run.
+Camera captures are limited to one per second. In standard mode, the local navigation loop
+requests each next decision after the previous action completes. In streaming mode, a heartbeat
+asks the model to continue only after its preceding turn completes. Recent action history and
+remembered places support exploration without a supplied floor plan. Place memory is saved in
+the recording, but is not automatically loaded into a later run.
 
 Before accepting an arrival claim, the bridge stops and collects fresh forward and side views.
 A separate, stateless visual reviewer receives only those images and the destination. If it
@@ -216,3 +221,20 @@ It also checks recorded obstacle contacts, falls, stop acknowledgement, and the 
 The model does not receive that
 information. A successful replayed speech test, a successful live-microphone test, and successful
 physical-robot navigation are distinct evidence and should be reported separately.
+
+To test cancellation during motion, start a fresh local simulator and run:
+
+```sh
+cd ~/Pollen/microduck/apps/navigation
+uv run python scripts/validate_voice_stop.py \
+  --goal-wav /absolute/path/go-to-the-kitchen.wav \
+  --stop-wav /absolute/path/stop.wav
+```
+
+The diagnostic sends the second WAV only after the model selects a walking action and fresh
+telemetry shows an active nonzero command. It separately checks physical displacement using
+the local simulator's read-only body protocol; those samples never enter model inputs. The
+recording includes `voice-stop-validation.json`. Passing requires a stop transcription before
+termination, cancellation, an acknowledged stop, and final zero commands. This does not certify
+physical settling or live-microphone performance. See the current results in
+[VALIDATION.md](../../apps/navigation/VALIDATION.md#voice-branch-integration--2026-09-16).

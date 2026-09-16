@@ -4,6 +4,7 @@ import asyncio
 import copy
 import io
 import json
+import math
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from duck_nav.cli import Recorder
 from duck_nav.live import (
     LiveConfig,
     LiveMission,
+    StationaryViews,
     connect_config,
     declarations,
     is_spoken_stop,
@@ -1014,11 +1016,161 @@ class VisualPlanner:
         self.decisions = iter(decisions)
         self.contexts = []
         self.images = []
+        self.views = []
 
-    async def decide(self, context, jpeg):
+    async def decide(self, context, jpeg, *, views=None):
         self.contexts.append(copy.deepcopy(context))
         self.images.append(jpeg)
+        self.views.append(copy.deepcopy(views))
         return next(self.decisions)
+
+
+def camera_snapshot(yaw_deg=0, pitch_deg=0, *, body_yaw=0, position=(0, 0, 0.12)):
+    snapshot = Robot().snapshot()
+    yaw, tilt = math.radians(yaw_deg) / 2, (math.pi / 2 - math.radians(pitch_deg)) / 2
+    # Camera optical +Z first rotates toward trunk +X, then about trunk +Z.
+    quaternion = [
+        math.cos(yaw) * math.cos(tilt),
+        -math.sin(yaw) * math.sin(tilt),
+        math.cos(yaw) * math.sin(tilt),
+        math.sin(yaw) * math.cos(tilt),
+    ]
+    snapshot["state"]["data"]["frames"] = {"camera": {"quat": quaternion}}
+    snapshot["state"]["data"]["odom"] = {"position": list(position), "yaw": body_yaw}
+    return snapshot
+
+
+def test_retained_scans_use_measured_optical_direction_and_replace_nearby_heading(tmp_path):
+    cache = StationaryViews(Recorder(tmp_path))
+    for yaw in (0, 45, -45, 2):
+        snapshot = camera_snapshot(yaw, -12)
+        # Requested gaze is deliberately contradictory; measured frame is authoritative.
+        snapshot["state"]["data"]["head"] = [0, 0, 0, 0]
+        current, image_path = cache.retain(snapshot, bytes([int(yaw + 50)]))
+    assert current["label"] == "front"
+    assert current["yaw_deg"] == pytest.approx(2)
+    assert current["pitch_deg"] == pytest.approx(-12)
+    assert Path(image_path).read_bytes() == bytes([52])
+    prior, references = cache.prior(snapshot, current)
+    assert len(cache.views) == 3
+    assert [view["camera"]["label"] for view in prior] == ["left", "right"]
+    assert [view["camera"]["yaw_deg"] for view in prior] == pytest.approx([45, -45])
+    assert all(0 <= view["camera"]["age_s"] < 1 for view in prior)
+    assert all(set(view) == {"camera", "jpeg"} for view in prior)
+    assert all(
+        Path(ref["image_path"]).read_bytes() == view["jpeg"] for view, ref in zip(prior, references)
+    )
+    assert "simulator_truth" not in json.dumps(references)
+
+
+@pytest.mark.parametrize("change", ["translated", "turned", "aged", "missing_odometry"])
+def test_old_scans_are_discarded_after_pose_change_or_expiry(tmp_path, change):
+    cache = StationaryViews(Recorder(tmp_path))
+    cache.retain(camera_snapshot(45), b"left")
+    current_snapshot = camera_snapshot()
+    if change == "translated":
+        current_snapshot["state"]["data"]["odom"]["position"][0] = 0.026
+    elif change == "turned":
+        current_snapshot["state"]["data"]["odom"]["yaw"] = math.radians(5.1)
+    elif change == "aged":
+        cache.views[0]["camera"]["received_at"] -= 31
+    else:
+        del current_snapshot["state"]["data"]["odom"]
+    cache.prune(current_snapshot)
+    assert not cache.views
+
+
+def test_nearby_pose_retains_scans_with_signed_wrapped_heading_delta(tmp_path):
+    cache = StationaryViews(Recorder(tmp_path))
+    cache.retain(camera_snapshot(45, body_yaw=math.radians(179)), b"left")
+    snapshot = camera_snapshot(body_yaw=math.radians(-179), position=(0.02, 0, 0.12))
+    current, _ = cache.retain(snapshot, b"front")
+    previous, _ = cache.prior(snapshot, current)
+    assert len(previous) == 1
+    assert previous[0]["camera"]["body_position_delta_m"] == pytest.approx(0.02)
+    assert previous[0]["camera"]["body_heading_delta_deg"] == pytest.approx(2)
+
+
+@pytest.mark.parametrize("failure", ["missing_frame", "bad_quaternion", "sensor_skew"])
+def test_unknown_or_unmatched_camera_orientation_clears_retained_scans(tmp_path, failure):
+    cache = StationaryViews(Recorder(tmp_path))
+    cache.retain(camera_snapshot(45), b"left")
+    snapshot = camera_snapshot()
+    if failure == "missing_frame":
+        del snapshot["state"]["data"]["frames"]["camera"]
+    elif failure == "bad_quaternion":
+        snapshot["state"]["data"]["frames"]["camera"]["quat"] = [0, 0, 0, 0]
+    else:
+        snapshot["state"]["received_at"] -= 0.2
+    camera, _ = cache.retain(snapshot, b"unknown")
+    assert camera is None
+    assert not cache.views
+
+
+async def test_standard_planner_compares_scans_at_same_pose_and_drops_them_after_motion(
+    tmp_path, fast_images
+):
+    class GazeRobot(Robot):
+        gaze_deg = 0
+
+        def snapshot(self):
+            snapshot = camera_snapshot(self.gaze_deg, -8, position=(self.distance, 0, 0.12))
+            snapshot["camera"]["image"][:] = {0: 50, 45: 150, -45: 250}[self.gaze_deg]
+            return snapshot
+
+        async def observe(self):
+            return {
+                **await super().observe(),
+                "ready": self.gaze_deg == 0,
+                "guard_reason": None if self.gaze_deg == 0 else "head_not_forward",
+                "depth_summary": {"sensor_yaw_deg": self.gaze_deg},
+            }
+
+        async def look_at(self, x, y, z):
+            self.gaze_deg = round(math.degrees(math.atan2(y, x)))
+            return await super().look_at(x, y, z)
+
+    planner = VisualPlanner(
+        [
+            {"name": "look_at", "args": {"x": 1, "y": 1, "z": 0, "reason": "Inspect left"}},
+            {"name": "look_at", "args": {"x": 1, "y": -1, "z": 0, "reason": "Inspect right"}},
+            {"name": "look_at", "args": {"x": 1, "y": 0, "z": 0, "reason": "Recenter"}},
+            {"name": "advance", "args": {"distance_m": 0.1, "reason": "Visible clear route"}},
+            {"name": "finish", "args": {"status": "blocked", "reason": "No onward route"}},
+        ]
+    )
+    result, robot, recorder = await run(
+        tmp_path, Session(), GazeRobot(), goal="Kitchen", navigation_planner=planner
+    )
+    assert result["status"] == "blocked"
+    assert robot.distance == pytest.approx(0.1)
+    assert [len(views) for views in planner.views] == [0, 1, 2, 2, 0]
+    assert [context["camera"]["label"] for context in planner.contexts] == [
+        "front",
+        "left",
+        "right",
+        "front",
+        "front",
+    ]
+    assert [context["ready"] for context in planner.contexts] == [True, False, False, True, True]
+    assert planner.contexts[3]["depth"] == {"sensor_yaw_deg": 0}
+    assert [view["camera"]["label"] for view in planner.views[3]] == ["left", "right"]
+    assert all(
+        set(view["camera"]) & {"ready", "depth", "simulator_truth"} == set()
+        for views in planner.views
+        for view in views
+    )
+    events = [
+        json.loads(line) for line in (recorder.path / "events.jsonl").read_text().splitlines()
+    ]
+    selected = [event for event in events if event["event"] == "visual_views_selected"]
+    for event, image, views in zip(selected, planner.images, planner.views, strict=True):
+        assert Path(event["current"]["image_path"]).read_bytes() == image
+        assert all(
+            Path(ref["image_path"]).read_bytes() == view["jpeg"]
+            for ref, view in zip(event["previous"], views, strict=True)
+        )
+    assert "simulator_truth" not in json.dumps(planner.contexts)
 
 
 async def test_autonomous_visual_steps_finish_without_voice_calls_or_replies(tmp_path, fast_images):
@@ -1063,10 +1215,10 @@ async def test_voice_cannot_replace_active_goal_or_instruct_visual_planner(tmp_p
     entered, received = asyncio.Event(), asyncio.Event()
 
     class Planner(VisualPlanner):
-        async def decide(self, context, jpeg):
+        async def decide(self, context, jpeg, *, views=None):
             entered.set()
             await received.wait()
-            return await super().decide(context, jpeg)
+            return await super().decide(context, jpeg, views=views)
 
     planner = Planner(
         [{"name": "finish", "args": {"status": "blocked", "reason": "Only a wall is visible"}}]
@@ -1129,7 +1281,7 @@ async def test_stop_cancels_pending_standard_planner(tmp_path, fast_images, canc
     class WaitingPlanner:
         model = "waiting-fixture"
 
-        async def decide(self, context, jpeg):
+        async def decide(self, context, jpeg, *, views=None):
             entered.set()
             try:
                 await asyncio.Event().wait()
@@ -1323,7 +1475,7 @@ async def test_voice_model_timeout_still_applies_before_goal_acceptance(tmp_path
 
 async def test_autonomous_planner_timeout_stops_mission(tmp_path, fast_images):
     class SlowPlanner:
-        async def decide(self, context, jpeg):
+        async def decide(self, context, jpeg, *, views=None):
             await asyncio.Event().wait()
 
     result, robot, _ = await run(

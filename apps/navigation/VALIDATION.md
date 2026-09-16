@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 337 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 460 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -75,6 +75,11 @@ Current integration evidence:
   Turn directions matched their requests; visual descriptions alternated between left and right
   after scans. The final obstacle refusal was followed by roughly 132 seconds of repeated
   camera scans. This motivates retaining labelled views from the same body position.
+- The planner now receives measured optical yaw/pitch with its current image and up to two
+  recent side scans. Scans expire after 30 seconds, 2.5 cm of body displacement, 5° of yaw,
+  or a dispatched walking action. Integration tests verify that both side views survive
+  recentering, the current guard remains authoritative, and exact selected JPEG bytes are
+  recorded with view IDs. Invalid or unsynchronized camera orientation discards cached scans.
 - The active-motion spoken-stop diagnostic in `runs/20260916T225938Z-323e2a10` failed:
   a valid synthesized “Stop” WAV began during an actual model-selected walking command,
   but no stop transcription arrived before the 120 s diagnostic deadline. The initial kitchen
