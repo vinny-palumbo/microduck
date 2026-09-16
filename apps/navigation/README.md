@@ -3,7 +3,8 @@
 This prototype accepts a typed goal, sends a fresh camera image to one model, executes one
 guarded action through WebRTC, and reassesses with the result and a new image. It tests visual
 decisions and honest blocked/stuck reporting. Reliable room navigation is not demonstrated;
-the current gait produces little settled movement.
+the default bounded commands produce little settled movement. Higher-speed simulator probes
+show movement, but are not calibrated navigation actions.
 
 Run from this checkout: the transport reuses `spaces/policy-shop/lan.py` and
 `spaces/shared/control.py`. This is not a standalone wheel for distribution.
@@ -32,9 +33,9 @@ environment; the bridge has no reliable drop-off detector. Keep other gamepad/br
 from driving during a run: the robot's existing command interface is last-writer-wins, and this
 client cannot acquire exclusive control.
 
-Use the daemons built from this checkout (IPC API 29). The gaze conversion fix changes
+Use the daemons built from this checkout (IPC API 30). The gaze conversion fix changes
 `robot.look` to return resendable policy offsets in `head` and absolute measured-joint targets
-in `joint_targets`; the bridge requires both. The launcher rebuilds the local daemons. A
+in `joint_targets`; the bridge requires both, plus `robot.model.joint_home` to preserve commanded neck posture. The launcher rebuilds the local daemons. A
 physical robot would need the matching daemon release installed before using this client.
 
 ## Use the tools
@@ -150,7 +151,8 @@ uv run duck-agent "Inspect the room" --scripted examples/inspect.json
 uv run duck-agent "Try a short forward move and report if stuck" --scripted examples/stuck.json
 ```
 
-The first checks gaze/observation/finish plumbing; the second exercises negligible-progress
+The first checks gaze/observation/finish plumbing (current optical alignment can time out);
+the second exercises negligible-progress
 handling on the current simulator gait. Expected exit is 2 for these blocked outcomes.
 `model: scripted-fixture` in the recording identifies these as plumbing tests, not evidence
 of visual understanding. The [validation record](VALIDATION.md) distinguishes them from live
@@ -164,8 +166,9 @@ model testing.
   no-progress check. Command duration is capped by the requested angle and yaw rate. An
   under-tracking gait returns an incomplete result with the measured angle; it is not retried
   automatically.
-- Gaze preserves measured neck posture, distinguishes policy offsets from absolute joint
-  targets, and waits for measured alignment and a subsequent camera frame within a timeout.
+- Gaze preserves commanded neck posture, distinguishes policy offsets from absolute joint
+  targets, and checks measured camera direction plus head-joint alignment before accepting a
+  subsequent camera frame. Neck tracking bias cannot accumulate through repeated looks.
 - Camera, robot state, depth, and health must be fresh. Repeated source timestamps do not count
   as new sensor observations. Missing or malformed data refuses movement.
 - Obstacle checks use the published ToF beam directions and current sensor pose, distinguish

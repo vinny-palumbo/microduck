@@ -82,6 +82,7 @@ class GuardConfig:
     look_min_hold_s: float = 0.4
     look_timeout_s: float = 1.0
     look_joint_tolerance_rad: float = 0.10
+    look_direction_tolerance_rad: float = 0.10
     obstacle_distance_m: float = 0.35
     min_loop_hz: float = 40.0
 
@@ -499,9 +500,11 @@ class GuardedRobot:
                 return {"action": "look_at", "completed": False, "reason": reason}
             neck_index = self.model["joint_names"].index("neck_pitch")
             params = dict(zip(("x", "y", "z"), point))
-            # Neck pitch is posture held by the IK, not part of aiming. Keep
-            # its measured posture rather than imposing the protocol's zero.
-            params["neck_pitch"] = _number(snapshot["state"]["data"]["joints"][neck_index])
+            # Preserve the commanded posture. Reusing measured neck pitch would
+            # accumulate the gait's tracking bias on every look and lower the neck.
+            home = _vector(self.model["joint_home"], len(self.model["joint_names"]))
+            command = _vector(snapshot["state"]["data"]["head"], 4)
+            params["neck_pitch"] = home[neck_index] + command[0]
             reply = await self._request("robot.look", params)
             requested_at, settled_at = time.monotonic(), None
             head = {
@@ -529,8 +532,20 @@ class GuardedRobot:
                 reached = all(
                     abs(measured[name] - target) <= self.config.look_joint_tolerance_rad
                     for name, target in joint_targets.items()
+                    if name != "neck_pitch"
                 )
-                if reached:
+                # Neck position is held by the gait and can have a steady tracking
+                # bias. The measured camera ray, not exact neck tracking, decides
+                # whether the requested point is actually in view.
+                camera = state["frames"]["camera"]
+                optical = _rotate(_unit(camera["quat"], 4), [0.0, 0.0, 1.0])
+                origin = _vector(camera["pos"], 3)
+                delta = [target - start for target, start in zip(point, origin)]
+                distance = math.sqrt(sum(v * v for v in delta))
+                aligned = distance > 1e-6 and sum(
+                    a * b / distance for a, b in zip(optical, delta)
+                ) >= math.cos(self.config.look_direction_tolerance_rad)
+                if reached and aligned:
                     settled_at = settled_at if settled_at is not None else now
                 else:
                     settled_at = None

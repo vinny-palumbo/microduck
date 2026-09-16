@@ -346,7 +346,13 @@ pub const JSONRPC_VERSION: &str = "2.0";
 /// solution was incorrectly fed to a policy trained on offsets, adding HOME a second time.
 /// Install the daemon release containing API 29 with gaze clients that verify these targets;
 /// there is no client-side compensation for older daemons. Version skew is reported, not refused.
-pub const API_VERSION: u32 = 29;
+///
+/// # v30 — published policy HOME joint positions
+///
+/// `robot.model` publishes `joint_home` in `joint_names` order. Gaze clients use it
+/// to preserve commanded neck posture instead of feeding measured tracking error
+/// back into the next command. Install the matching daemon for these clients.
+pub const API_VERSION: u32 = 30;
 
 /// The observation width every policy this robot family runs is built against.
 ///
@@ -3562,6 +3568,8 @@ pub struct ModelResult {
     pub trunk_height_m: f64,
     /// Every joint, in [`RobotState::joints`] order.
     pub joint_names: Vec<String>,
+    /// Absolute HOME angles underlying policy offsets, in `joint_names` order. (v30)
+    pub joint_home: Vec<f64>,
     /// The four head joints in the order [`RobotState::head`] uses.
     pub head_joints: Vec<String>,
     /// Unit direction of each ToF zone in the sensor frame, row-major like

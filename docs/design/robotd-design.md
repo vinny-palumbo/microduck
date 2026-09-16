@@ -594,6 +594,13 @@ daemon release containing API 29 alongside gaze clients using this response; cli
 report a missing field instead of applying a compensation for an older daemon. Existing
 gamepad and direct `robot.head` offset commands retain their meaning.
 
+API 30 adds `robot.model.joint_home`, absolute HOME angles in `joint_names` order. A gaze
+client preserving neck posture adds the applied neck command (`robot.state.head[0]`) to
+the published neck HOME angle. Reusing measured neck pitch as the next command accumulates
+steady tracking error through repeated looks. Install the API 30 daemon alongside clients
+requiring this field; missing geometry is an error, not a reason to hardcode HOME.
+Measured camera poses remain the basis for judging optical alignment.
+
 ### 3.2 State out
 
 One stream, subscribable, decimated per subscriber. It must report what was **refused**, not
@@ -1023,7 +1030,7 @@ projected gravity, and where the camera and the ToF sensor are. All three are ad
   anything yet; when it is, it streams beside `tof.frame`, not here.
 - **`frames: {camera, tof}`** are trunk-frame poses at this tick's *measured* head joints from
   `kinematics::head::HeadFk` — the same FK `robot.look` solves against — and **`robot.model`**
-  answers the static geometry (trunk height, joint order, ToF beam directions, the poses at head
+  answers the static geometry (trunk height, joint order and HOME angles, ToF beam directions, the poses at head
   zero). The kinematics stay in one crate; a client asks rather than transcribes.
 
 Cost: three small structs per published tick, only while someone is subscribed; the FK is ~50 ns.

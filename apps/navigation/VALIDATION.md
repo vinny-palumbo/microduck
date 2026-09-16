@@ -252,6 +252,65 @@ This is evidence that the revised loop can report both guard refusals and ineffe
 including an accepted command that did not meaningfully move the robot. It is not a reliability
 benchmark, proof of obstacle identity, physical stillness, or successful navigation.
 
+## Locomotion diagnosis and gaze correction (API 30)
+
+The failed low-speed commands do not establish that the policy cannot walk. CPU MuJoCo
+probes of the same deployed `velstand.onnx` (SHA-256
+`1c659be55da94bc5753b707de5c6a3e7c49931e05ca3b6991615cef1a8ba9a45`) found a sharp response
+change: two-second commands from 0.10 through 0.25 m/s moved less than 1 mm after settling;
+0.30 m/s moved about 104 mm with nearly 8 degrees of heading drift. Shorter pulses also
+showed a startup delay. These are individual trials, not calibrated or repeatability results.
+
+Changing collision settings did not remove the low-command failure. Restoring BAM was not
+necessary to demonstrate motion. Runtime action scaling/filtering differs from training,
+but isolated tests with and without it also moved at 0.30 m/s, so this investigation does not
+justify changing those settings.
+
+A separate causal fault was found in gaze: each look used measured neck pitch as the next
+absolute neck target. The policy has a steady neck tracking bias, so repeated looks could
+progressively lower the commanded posture. In an isolated 1.5-second 0.30 m/s comparison
+using runtime scaling/filtering, neutral head commands moved about 105 mm; the lowered
+neck command moved about 1.14 mm. Scratch experiment summaries are in ignored
+`runs/contact_audit.json`, `speed_audit.json`, `short_pulse_audit.json`,
+`duration_audit.json`, `filter_audit.json` and `head_audit.json`.
+
+Two live WebRTC probes support this finding:
+
+- `20260916T190418Z-9d10045b/forward.json`: after the old recenter call, a 0.30 m/s,
+  1.5-second command produced about 1.18 mm settled simulator-truth displacement.
+- `20260916T190847Z-7ca0bcc6/forward.json`: neutral head commands produced 65.42 mm
+  displacement and -2.47 degrees of heading change. An odometry monitor requested stop at
+  50 mm, about 1.19 seconds into the command. The settled displacement overshot that cutoff
+  by about 15 mm. Final requested commands were zero.
+
+These diagnostic probes retained sensor/health/depth guards and imposed a 1.5-second cap,
+50 mm odometry cutoff and 10-degree heading cutoff. They used a diagnostic 0.30 m/s command
+outside the model tool's limit. Simulator truth was used for evaluation only. The production
+forward limit remains 0.10 m/s; no gait, actuator, policy weights or training changes were made.
+
+API 30 publishes HOME joint angles. The bridge now preserves the applied neck command
+instead of measured tracking error. It also requires the measured camera optical ray to be
+within 0.10 radians of the requested point, alongside head-joint alignment and a subsequent
+fresh camera frame. Exact neck tracking is not required when the camera is correctly aimed.
+
+`20260916T191525Z-957ed74d/events.jsonl` records three successive live recenter calls after
+rebuilding the daemons. All preserved a zero neck offset and acknowledged stop, but all
+returned `look_timeout`: the measured camera did not meet the new alignment criterion.
+This exposes remaining gaze tracking error; it is not a successful gaze or navigation test.
+Earlier `gaze_settled` results used only the older joint checks and must not be interpreted as
+passing this stronger optical alignment check. The inspection fixture may now end blocked
+on gaze timeout. Fixing this requires measured gaze feedback or a demonstrated tracking fix,
+not relaxing the criterion or retrying body movement.
+
+Regression validation: 95 Python tests plus 9 subtests passed; Ruff passed. Rust tests for
+`robotd` and `duck-ipc-proto`: 217 passed, 1 ignored. Tests cover repeated looks despite neck
+tracking bias, preserving nonzero posture, missing contract fields and rejecting a misaligned
+camera even when joint checks pass.
+
+The next experiment should close and validate the gaze feedback loop while preserving neck
+posture. Only then calibrate a short forward primitive across repeated trials, including
+heading drift and stopping overshoot, before exposing an effective speed to the visual agent.
+
 ## Remaining limits
 
 - The turn calibration above fails. The bridge reports incomplete turns and does not

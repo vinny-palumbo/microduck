@@ -27,6 +27,7 @@ class FakeRobot:
             "trunk_height_m": 0.12,
             "tof_beams": [],
             "joint_names": ["neck_pitch", "head_pitch", "head_yaw", "head_roll"],
+            "joint_home": [0.3491, 0.3491, 0, 0],
         }
         self.look_result = {
             "head": dict.fromkeys(self.model["joint_names"], 0),
@@ -61,8 +62,12 @@ class FakeRobot:
             "policy": "walk",
             "loop": {"hz": 50},
             "joints": [0.3491, 0.3491, 0, 0],
+            "head": [0, 0, 0, 0],
             "odom": {"position": [0, 0, 0.12], "yaw": 0},
-            "frames": {"tof": {"pos": [0.03, 0, 0.05], "quat": [1, 0, 0, 0]}},
+            "frames": {
+                "tof": {"pos": [0.03, 0, 0.05], "quat": [1, 0, 0, 0]},
+                "camera": {"pos": [0, 0, 0], "quat": [math.sqrt(0.5), 0, math.sqrt(0.5), 0]},
+            },
         }
         self.depth = {
             "t_ns": 1,
@@ -267,15 +272,36 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "invalid_telemetry")
         self.assertEqual(self.transport.head_pulses, [])
 
-    async def test_look_preserves_measured_neck_posture(self):
-        self.transport.state["joints"][0] = 0.27
-        self.transport.look_result["joint_targets"]["neck_pitch"] = 0.27
-        self.transport.look_result["head"]["neck_pitch"] = 0.27 - 0.3491
-        self.assertTrue((await self.robot.look_at(1, 0.1, 0.05))["completed"])
-        requested = next(
-            params for method, params in self.transport.calls if method == "robot.look"
-        )
-        self.assertEqual(requested, {"x": 1, "y": 0.1, "z": 0.05, "neck_pitch": 0.27})
+    async def test_repeated_looks_preserve_command_despite_neck_tracking_bias(self):
+        # A lower measured angle must not become a progressively lower command.
+        for measured in (0.27, 0.23, 0.19):
+            self.transport.state["joints"][0] = measured
+            self.assertTrue((await self.robot.look_at(1, 0, 0))["completed"])
+        requests = [p for method, p in self.transport.calls if method == "robot.look"]
+        self.assertEqual([p["neck_pitch"] for p in requests], [0.3491] * 3)
+
+    async def test_look_preserves_nonzero_neck_command(self):
+        self.transport.state["head"][0] = -0.05
+        self.assertTrue((await self.robot.look_at(1, 0, 0))["completed"])
+        params = next(p for method, p in self.transport.calls if method == "robot.look")
+        self.assertAlmostEqual(params["neck_pitch"], 0.2991)
+
+    async def test_joint_alignment_alone_does_not_prove_camera_aim(self):
+        self.transport.state["frames"]["camera"]["quat"] = [1, 0, 0, 0]
+        self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "look_timeout")
+
+    async def test_look_requires_home_command_and_camera_contract(self):
+        for field in ("joint_home", "head", "camera"):
+            container = (
+                self.transport.model
+                if field == "joint_home"
+                else self.transport.state
+                if field == "head"
+                else self.transport.state["frames"]
+            )
+            saved = container.pop(field)
+            self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "invalid_telemetry")
+            container[field] = saved
 
     async def test_explicit_stop_cancels_head_hold(self):
         look = asyncio.create_task(self.robot.look_at(1, 0, 0))

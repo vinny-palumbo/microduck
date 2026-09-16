@@ -4668,6 +4668,7 @@ mod mapping {
             asset: "alpha".to_owned(),
             trunk_height_m: model.trunk_height_m(),
             joint_names: proto::JOINT_NAMES.iter().map(|s| (*s).to_owned()).collect(),
+            joint_home: duck_control::DEFAULT_POSITION.to_vec(),
             head_joints: HEAD.iter().map(|s| (*s).to_owned()).collect(),
             tof_beams: TOF.beams().to_vec(),
             tof_fov_deg: kinematics::tof::FOV_DEG,
@@ -4695,6 +4696,7 @@ mod mapping {
             let m = model();
             assert_eq!(m.tof_beams.len(), 64);
             assert_eq!(m.joint_names.len(), 15);
+            assert_eq!(m.joint_home, duck_control::DEFAULT_POSITION.to_vec());
             assert!(m.trunk_height_m > 0.05 && m.trunk_height_m < 0.3);
             // Camera and ToF are parallel, a couple of centimetres apart.
             let f = m.frames_at_zero;
