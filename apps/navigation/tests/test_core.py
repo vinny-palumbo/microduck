@@ -360,6 +360,67 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(outcome["stop"]["acknowledged"])
         self.assertEqual(outcome["corrections"], 0)
 
+    def simulate_left_to_right_sweep(self, *, stall_fraction=1.0):
+        self.robot.config = replace(
+            self.robot.config, look_feedback_period_s=0.04, look_timeout_s=0.5
+        )
+        original_snapshot = self.transport.snapshot
+        original_request = self.transport.request
+        requested_at = None
+
+        async def request(method, params):
+            nonlocal requested_at
+            result = await original_request(method, params)
+            if method == "robot.look" and requested_at is None:
+                requested_at = time.monotonic()
+            return result
+
+        def snapshot():
+            elapsed = 0 if requested_at is None else time.monotonic() - requested_at
+            fraction = min(stall_fraction, elapsed / 0.16)
+            yaw = math.pi / 4 - math.pi / 2 * fraction
+            # Camera +Z points along trunk +X after its fixed 90-degree pitch,
+            # then sweeps from trunk left (+45) to trunk right (-45 degrees).
+            c, s = math.cos(yaw / 2) / math.sqrt(2), math.sin(yaw / 2) / math.sqrt(2)
+            self.transport.state["frames"]["camera"]["quat"] = [c, -s, c, s]
+            return original_snapshot()
+
+        self.transport.request = request
+        self.transport.snapshot = snapshot
+
+    async def test_wide_sweep_does_not_correct_while_camera_approaches_target(self):
+        self.simulate_left_to_right_sweep()
+        outcome = await self.robot.look_at(1, -1, 0)
+        self.assertEqual(outcome["reason"], "gaze_settled")
+        self.assertTrue(outcome["completed"])
+        self.assertEqual(outcome["corrections"], 0)
+        self.assertLessEqual(
+            outcome["aim_error_rad"], self.robot.config.look_direction_tolerance_rad
+        )
+        self.assertEqual(len([call for call in self.transport.calls if call[0] == "robot.look"]), 1)
+        self.assertEqual(self.transport.moving_pulses(), [])
+        self.assertTrue(outcome["stop"]["acknowledged"])
+
+    async def test_stalled_wide_sweep_still_enforces_correction_limit(self):
+        self.simulate_left_to_right_sweep(stall_fraction=0.3)
+        outcome = await self.robot.look_at(1, -1, 0)
+        self.assertEqual(outcome["reason"], "look_correction_limit")
+        self.assertFalse(outcome["completed"])
+        self.assertEqual(outcome["corrections"], 0)
+        self.assertLess(outcome["elapsed_s"], self.robot.config.look_timeout_s)
+        self.assertEqual(self.transport.moving_pulses(), [])
+        self.assertTrue(outcome["stop"]["acknowledged"])
+
+    async def test_approaching_target_cannot_extend_look_timeout(self):
+        self.simulate_left_to_right_sweep()
+        self.robot.config = replace(self.robot.config, look_timeout_s=0.07)
+        outcome = await self.robot.look_at(1, -1, 0)
+        self.assertEqual(outcome["reason"], "look_timeout")
+        self.assertFalse(outcome["completed"])
+        self.assertEqual(outcome["corrections"], 0)
+        self.assertLess(outcome["elapsed_s"], 0.12)
+        self.assertTrue(outcome["stop"]["acknowledged"])
+
     async def test_look_requires_home_command_and_camera_contract(self):
         for field in ("joint_home", "head", "camera"):
             container = (

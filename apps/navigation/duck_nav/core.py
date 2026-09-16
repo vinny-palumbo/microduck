@@ -541,6 +541,7 @@ class GuardedRobot:
             reply = await self._request("robot.look", params)
             requested_at, settled_at = time.monotonic(), None
             last_adjusted = requested_at
+            feedback_error = None
             virtual_point = point.copy()
             head = {
                 key: _number(reply["head"][key])
@@ -570,6 +571,8 @@ class GuardedRobot:
                 desired = [v / distance for v in delta]
                 cosine = sum(a * b for a, b in zip(optical, desired))
                 aim_error = math.acos(max(-1.0, min(1.0, cosine)))
+                if feedback_error is None:
+                    feedback_error = aim_error
                 aligned = aim_error <= self.config.look_direction_tolerance_rad
                 if aligned:
                     settled_at = settled_at if settled_at is not None else now
@@ -589,31 +592,40 @@ class GuardedRobot:
                     reason = "look_timeout"
                     break
                 if not aligned and now - last_adjusted >= self.config.look_feedback_period_s:
-                    # Move a virtual IK target opposite the measured optical error.
-                    # IK and travel limits stay daemon-owned; the original target
-                    # remains the only success criterion. Never accumulate posture.
-                    proposed = [
-                        v + self.config.look_feedback_gain * distance * (d - o)
-                        for v, d, o in zip(virtual_point, desired, optical)
-                    ]
-                    correction = math.dist(proposed, point)
-                    limit = self.config.look_max_correction_ratio * math.sqrt(
-                        sum(v * v for v in point)
+                    # A wide sweep can still be approaching its requested target
+                    # at the first feedback tick. Correct only the remaining bias
+                    # once improvement slows, rather than winding up against that
+                    # normal transient. The original timeout still bounds waiting.
+                    approaching = (
+                        feedback_error - aim_error > self.config.look_direction_tolerance_rad * 0.5
                     )
-                    if correction > limit:
-                        reason = "look_correction_limit"
-                        break
-                    virtual_point = proposed
-                    params.update(zip(("x", "y", "z"), virtual_point))
-                    reply = await self._request("robot.look", params)
-                    head = {key: _number(reply["head"][key]) for key in head}
-                    for key in head:
-                        _number(reply["joint_targets"][key])
-                    if reply.get("clamped") is not False:
-                        reason = "look_clamped"
-                        break
-                    corrections += 1
-                    last_adjusted, settled_at = time.monotonic(), None
+                    feedback_error, last_adjusted = aim_error, now
+                    if not approaching:
+                        # Move a virtual IK target opposite the measured optical
+                        # error. IK and travel limits stay daemon-owned; only the
+                        # original target can establish success. Preserve posture.
+                        proposed = [
+                            v + self.config.look_feedback_gain * distance * (d - o)
+                            for v, d, o in zip(virtual_point, desired, optical)
+                        ]
+                        correction = math.dist(proposed, point)
+                        limit = self.config.look_max_correction_ratio * math.sqrt(
+                            sum(v * v for v in point)
+                        )
+                        if correction > limit:
+                            reason = "look_correction_limit"
+                            break
+                        virtual_point = proposed
+                        params.update(zip(("x", "y", "z"), virtual_point))
+                        reply = await self._request("robot.look", params)
+                        head = {key: _number(reply["head"][key]) for key in head}
+                        for key in head:
+                            _number(reply["joint_targets"][key])
+                        if reply.get("clamped") is not False:
+                            reason = "look_clamped"
+                            break
+                        corrections += 1
+                        last_adjusted, settled_at = time.monotonic(), None
                 self.transport.notify("robot.head", head)
                 try:
                     await asyncio.wait_for(cancel.wait(), self.config.pulse_period_s)

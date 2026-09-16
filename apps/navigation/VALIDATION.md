@@ -9,8 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 189 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed before recovery review.
-  Subsequent targeted checks passed all 54 live-session and 30 guard tests. The checks include
+- 198 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -35,6 +34,12 @@ Current integration evidence:
   inspection, and bounded refusal recovery were added afterward; the 0.35 m obstacle guard
   remains unchanged. Recovery tests cover inspection, changed commands, readiness, retry
   limits, and fatal sensor/health/stop failures.
+- Run `runs/20260916T221426Z-afde477e` travelled 0.802 m with no recorded collisions or falls,
+  then stopped when a wide head sweep was corrected prematurely. Measured optical error was
+  still falling quickly. Feedback now waits while the head approaches its target, preserving
+  the 2 s timeout, 0.10 rad alignment tolerance, and correction limit. All seven subsequent
+  real-daemon gaze checks passed in `runs/20260916T221950Z-0eba319c`, including left-to-right
+  and right-to-left 90° sweeps; final errors were 0.063–0.086 rad in 1.35–1.61 s.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
