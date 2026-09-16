@@ -168,6 +168,15 @@ Current integration evidence:
   `runs/arrival-validation-20260916T234154270979Z.json`: three doorway rejections, one interior
   acceptance, one plain-wall rejection, and three non-kitchen rejections. The full offline
   suite passed 493 tests plus 9 subtests; Ruff check and formatting passed.
+- Three paired provider comparisons applied the same kitchen-identification rule to visual
+  planning. On recorded inputs 009/step11 and 010/step5, the original prompt chose right turns;
+  the stricter prompt chose straight corridor travel and a left camera inspection respectively.
+  Both versions chose straight travel on 011/step14. All three stricter responses avoided
+  unsupported kitchen identity. Each variant was sampled only once per input, and replay
+  telemetry was reconstructed from recorded observations, so this supports prompt consistency
+  rather than route reliability. Reports are stored as `step*-kitchen-fixtures-comparison.json`
+  in the corresponding run directories. The tested text is now included in the planner;
+  149 planner tests and Ruff passed. No map, route hint, or extra review stage was added.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
