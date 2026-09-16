@@ -100,6 +100,11 @@ WSLg, PulseAudio exposes the Windows microphone. Capture uses `parec` or `pareco
 with FFmpeg as a fallback. To select a PulseAudio source, add `--mic-device SOURCE`.
 
 Say “stop” or “cancel the mission” to end the run. Ctrl-C also cancels and requests a stop.
+Standard mode sends explicit audio activity boundaries to preserve short follow-up commands:
+it retains 200 ms of preceding PCM and ends an utterance after 500 ms of quiet audio, with a
+15 s segment limit. This energy detector does not recognize words; cloud transcription still
+determines spoken cancellation. Loud background noise can form a segment, and very quiet
+speech can be missed. Microphone and motor-noise performance still need hardware validation.
 Run one controller at a time: another browser or gamepad can overwrite robot commands; the bridge
 cannot acquire exclusive control. A finished or blocked session exits. Start another invocation
 for a new mission.

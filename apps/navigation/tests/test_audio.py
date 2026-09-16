@@ -6,7 +6,68 @@ import wave
 import numpy as np
 import pytest
 
-from duck_nav.audio import CHUNK_SAMPLES, RATE, microphone_chunks, speak_local, wav_chunks
+from duck_nav.audio import (
+    CHUNK_SAMPLES,
+    RATE,
+    PcmActivity,
+    microphone_chunks,
+    speak_local,
+    wav_chunks,
+)
+
+
+def test_manual_activity_retains_prefix_and_closes_each_short_utterance():
+    segmenter = PcmActivity()
+    quiet = np.full(1600, 20, dtype="<i2").tobytes()
+    voiced = np.full(1600, 2000, dtype="<i2").tobytes()
+    for _ in range(20):
+        assert segmenter.push(quiet) == []
+    first = segmenter.push(voiced)
+    assert first[0] == {"activity_start": {}}
+    assert first[1]["audio"]["data"] == quiet * 2 + voiced
+    assert segmenter.push(voiced) == [PcmActivity.audio(voiced)]
+    for _ in range(4):
+        assert segmenter.push(quiet) == [PcmActivity.audio(quiet)]
+    assert segmenter.push(quiet) == [PcmActivity.audio(quiet), {"activity_end": {}}]
+    assert segmenter.push(quiet) == []
+    assert segmenter.push(voiced)[0] == {"activity_start": {}}
+    assert segmenter.finish() == [{"activity_end": {}}]
+    assert segmenter.finish() == []
+
+
+def test_activity_silence_uses_sample_duration_not_chunk_count():
+    segmenter = PcmActivity()
+    segmenter.push(np.full(160, 2000, dtype="<i2").tobytes())
+    messages = []
+    for _ in range(49):
+        messages.extend(segmenter.push(bytes(320)))
+    assert not any("activity_end" in message for message in messages)
+    assert segmenter.push(bytes(320))[-1] == {"activity_end": {}}
+
+
+def test_low_level_noise_never_opens_a_turn_and_prefix_is_bounded():
+    segmenter = PcmActivity()
+    noise = np.tile(np.array([-299, 299], dtype="<i2"), 800).tobytes()
+    for _ in range(200):
+        assert segmenter.push(noise) == []
+    assert len(segmenter.prefix) == segmenter.prefix_samples * 2
+    assert segmenter.finish() == []
+
+
+def test_continuous_energy_cannot_leave_a_turn_open_indefinitely():
+    segmenter = PcmActivity()
+    chunk = np.full(1600, 3000, dtype="<i2").tobytes()
+    messages = []
+    for _ in range(150):
+        messages.extend(segmenter.push(chunk))
+    assert messages[-1] == {"activity_end": {}}
+    assert not segmenter.active
+
+
+@pytest.mark.parametrize("bad", [None, b"", b"x", "pcm"])
+def test_activity_rejects_invalid_pcm(bad):
+    with pytest.raises(ValueError):
+        PcmActivity().push(bad)
 
 
 @pytest.mark.parametrize("rate,channels", [(16000, 1), (48000, 2), (22050, 1)])

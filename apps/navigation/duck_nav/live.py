@@ -17,7 +17,7 @@ from pathlib import Path
 from PIL import Image
 
 from .agent import fresh_observation, progress, visual_context
-from .audio import microphone_chunks, speak_local, wav_chunks
+from .audio import PcmActivity, microphone_chunks, speak_local, wav_chunks
 from .cli import TOOLS, Recorder, dispatch
 from .core import _number, _rotate, _unit, _vector
 from .credentials import load_gemini_key
@@ -352,13 +352,18 @@ def connect_config(visual_planner="streaming"):
     tools = declarations()
     if visual_planner == "standard":
         tools = [tool for tool in tools if tool["name"] in VOICE_TOOL_NAMES]
-    return {
+    config = {
         "response_modalities": ["TEXT"],
         "system_instruction": VOICE_SYSTEM if visual_planner == "standard" else SYSTEM,
         "input_audio_transcription": {},
         "context_window_compression": {"sliding_window": {}},
         "tools": [{"function_declarations": tools}],
     }
+    if visual_planner == "standard":
+        # Explicit PCM activity boundaries preserve short follow-up instructions
+        # that the robotics endpoint's automatic VAD can silently omit.
+        config["realtime_input_config"] = {"automatic_activity_detection": {"disabled": True}}
+    return config
 
 
 class LiveMission:
@@ -673,19 +678,29 @@ class LiveMission:
 
     async def audio_input(self):
         source = aiter(self.audio)
+        activity = PcmActivity() if self.navigation_planner is not None else None
         try:
             while not self.done.is_set():
                 try:
                     chunk = await asyncio.wait_for(anext(source), self.config.audio_timeout_s)
                 except StopAsyncIteration:
-                    await self.session.send_realtime_input(audio_stream_end=True)
+                    if activity is None:
+                        await self.session.send_realtime_input(audio_stream_end=True)
+                    else:
+                        for message in activity.finish():
+                            await self.session.send_realtime_input(**message)
+                            self.record("audio_activity_ended", cause="source_ended")
                     self.record("audio_input_ended")
                     return
                 if not isinstance(chunk, bytes) or not chunk or len(chunk) % 2:
                     raise ValueError("Audio source must supply nonempty 16-bit PCM byte chunks")
-                await self.session.send_realtime_input(
-                    audio={"data": chunk, "mime_type": "audio/pcm;rate=16000"}
-                )
+                messages = [PcmActivity.audio(chunk)] if activity is None else activity.push(chunk)
+                for message in messages:
+                    await self.session.send_realtime_input(**message)
+                    if "activity_start" in message:
+                        self.record("audio_activity_started", source="pcm_energy")
+                    elif "activity_end" in message:
+                        self.record("audio_activity_ended", cause="silence_or_duration")
         finally:
             close = getattr(source, "aclose", None)
             if close:

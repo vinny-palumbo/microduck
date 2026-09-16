@@ -15,6 +15,60 @@ RATE = 16000
 CHUNK_SAMPLES = 1600
 
 
+class PcmActivity:
+    """Bound manual Live API audio turns; this detects energy, not words or intent.
+
+    Robotics streaming can omit short second utterances with automatic VAD. Keep
+    a brief prefix to preserve consonants, and explicitly close each audio turn
+    after silence. Low-level input is ignored; loud noise may still form a turn.
+    No movement or stop decision is inferred here from audio energy.
+    """
+
+    threshold_rms = 300
+    prefix_samples = RATE // 5
+    silence_samples = RATE // 2
+    max_samples = RATE * 15
+
+    def __init__(self):
+        self.prefix = bytearray()
+        self.active = False
+        self.quiet_samples = 0
+        self.turn_samples = 0
+
+    @staticmethod
+    def audio(chunk):
+        return {"audio": {"data": chunk, "mime_type": "audio/pcm;rate=16000"}}
+
+    def push(self, chunk):
+        if not isinstance(chunk, bytes) or not chunk or len(chunk) % 2:
+            raise ValueError("Audio activity input must be nonempty 16-bit PCM bytes")
+        samples = np.frombuffer(chunk, dtype="<i2").astype(np.float64)
+        energetic = float(np.sqrt(np.mean(samples * samples))) >= self.threshold_rms
+        if not self.active:
+            if not energetic:
+                self.prefix.extend(chunk)
+                del self.prefix[: max(0, len(self.prefix) - self.prefix_samples * 2)]
+                return []
+            self.active = True
+            self.turn_samples = len(self.prefix) // 2 + len(samples)
+            buffered = bytes(self.prefix) + chunk
+            self.prefix.clear()
+            return [{"activity_start": {}}, self.audio(buffered)]
+        self.turn_samples += len(samples)
+        self.quiet_samples = 0 if energetic else self.quiet_samples + len(samples)
+        messages = [self.audio(chunk)]
+        if self.quiet_samples >= self.silence_samples or self.turn_samples >= self.max_samples:
+            messages.extend(self.finish())
+        return messages
+
+    def finish(self):
+        active = self.active
+        self.active = False
+        self.prefix.clear()
+        self.quiet_samples = self.turn_samples = 0
+        return [{"activity_end": {}}] if active else []
+
+
 async def wav_chunks(path: Path, *, realtime: bool = True) -> AsyncIterator[bytes]:
     """Play an actual PCM WAV into the microphone path, including VAD trailing silence.
 

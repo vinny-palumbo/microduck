@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 460 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 472 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -100,6 +100,14 @@ Current integration evidence:
   validated; the earlier stationary-stop result does not establish interruption during motion.
   `scripts/validate_voice_stop.py` records the audio trigger, read-only simulator motion,
   transcription, terminal result, and final commands separately, with 22 offline regression tests.
+- Controlled follow-up audio tests reproduced intermittent loss of the short second utterance
+  with automatic activity detection. Removing video did not isolate the cause, and flushing
+  audio after silence did not fix it. Explicit activity boundaries passed four cloud tests,
+  including the production audio path with a fake robot in `runs/20260916T231607Z-8059fdc4`:
+  the same short “Stop” was transcribed 1.044 s after its first energetic PCM and cancelled
+  the mission. Standard mode now uses bounded PCM segmentation; legacy streaming mode retains
+  server activity detection. These tests establish audio behavior, not interruption of actual
+  motion; the simulator diagnostic must still be rerun after this change.
 - An offline 24-trial pure-yaw screen used the unchanged policy and navigation scene at the
   clear starting pose, commands of ±0.5/±0.8 rad/s for 1/2/3 seconds, and two repetitions.
   Active yaw excursions of 3.6–9.1° returned to within 0.63° after settling; final translation

@@ -1351,9 +1351,13 @@ async def test_spoken_goal_starts_navigation_while_voice_tool_response_is_pendin
     async def response(_):
         await asyncio.Event().wait()
 
+    async def pcm_fixture():
+        # Energy opens a manual audio turn; this is a protocol fixture, not ASR proof.
+        yield np.full(1600, 2000, dtype="<i2").tobytes()
+
     session.on_audio, session.on_response = audio, response
     result, robot, _ = await asyncio.wait_for(
-        run(tmp_path, session, audio=silent_audio(), navigation_planner=planner),
+        run(tmp_path, session, audio=pcm_fixture(), navigation_planner=planner),
         1,
     )
     assert result["status"] == "blocked"
@@ -1361,6 +1365,65 @@ async def test_spoken_goal_starts_navigation_while_voice_tool_response_is_pendin
     assert result["actions"] == 3  # One voice acceptance and two visual decisions.
     assert result["navigation_actions"] == 2
     assert robot.calls == ["stop", "advance", "stop"]
+
+
+async def test_standard_audio_brackets_two_utterances_and_closes_on_eof(tmp_path):
+    robot, session = Robot(), Session()
+    voiced = np.full(1600, 2000, dtype="<i2").tobytes()
+
+    async def audio():
+        for chunk in [bytes(3200)] * 3 + [voiced] + [bytes(3200)] * 8 + [voiced]:
+            yield chunk
+
+    mission = LiveMission(
+        robot,
+        robot,
+        session,
+        Recorder(tmp_path),
+        audio=audio(),
+        goal=None,
+        config=LiveConfig(),
+        speak=None,
+        emit=lambda event: None,
+        navigation_planner=VisualPlanner([]),
+    )
+    await mission.audio_input()
+    boundaries = [message for message in session.inputs if "audio" not in message]
+    assert boundaries == [
+        {"activity_start": {}},
+        {"activity_end": {}},
+        {"activity_start": {}},
+        {"activity_end": {}},
+    ]
+    first = next(message["audio"]["data"] for message in session.inputs if "audio" in message)
+    assert first == bytes(6400) + voiced
+    assert not any("audio_stream_end" in message for message in session.inputs)
+
+
+async def test_standard_silence_does_not_create_user_activity(tmp_path):
+    robot, session = Robot(), Session()
+    mission = LiveMission(
+        robot,
+        robot,
+        session,
+        Recorder(tmp_path),
+        audio=silent_audio(),
+        goal=None,
+        config=LiveConfig(),
+        speak=None,
+        emit=lambda event: None,
+        navigation_planner=VisualPlanner([]),
+    )
+    await mission.audio_input()
+    assert session.inputs == []
+
+
+def test_standard_uses_manual_activity_while_streaming_keeps_automatic_vad():
+    from google.genai import types
+
+    standard = types.LiveConnectConfig(**connect_config("standard"))
+    assert standard.realtime_input_config.automatic_activity_detection.disabled is True
+    assert "realtime_input_config" not in connect_config("streaming")
 
 
 async def test_standard_motion_is_serial_while_voice_can_confirm_existing_goal(
