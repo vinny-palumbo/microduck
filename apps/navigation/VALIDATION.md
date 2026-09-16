@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 487 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 493 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -148,6 +148,26 @@ Current integration evidence:
   Active yaw excursions of 3.6–9.1° returned to within 0.63° after settling; final translation
   stayed below 0.48 mm, with no falls or obstacle contacts. This does not provide a usable pivot
   primitive. Results remain in the RL checkout's `artifacts/navigation/pivot-screening.json`.
+- Run `runs/20260916T233127Z-9356b698` explored the wrong room and stopped blocked after
+  62 calls and 458.9 s. Exact scoring of `voice-mission-011.truth.jsonl` found 2.881 m net
+  displacement, valid coverage across 4,589 samples, no falls, and no arrival. It also found
+  770 physics contact steps with `bed_ns_l` (773 contacts, maximum penetration 0.955 mm).
+  This trial therefore fails the collision criterion despite ending upright and stopped.
+  Forward depth alone did not protect the entire moving body from furniture contact.
+- During that run, the independent reviewer incorrectly called ordinary cabinets and a
+  blue-topped table kitchen evidence. Kitchen review now requires a recognizable fixture
+  with functional features: an oven, cooktop, sink with faucet, or refrigerator. Generic
+  furniture is supporting evidence only. Three provider checks of the exact second-claim
+  images now reject both kitchen visibility and entry; the known interior remains accepted
+  and the kitchen doorway remains visible but not entered. Results with prompt/image hashes
+  are saved in that run's `arrival-identity-regression.json`. Four byte-identical negative
+  JPEGs are included in the versioned arrival fixtures; the complete manual suite now makes
+  eight provider requests. Capture-interval simulator truth confirmed the negative label
+  independently and is never included in reviewer inputs.
+- The complete updated manual perception suite passed all eight provider checks in
+  `runs/arrival-validation-20260916T234154270979Z.json`: three doorway rejections, one interior
+  acceptance, one plain-wall rejection, and three non-kitchen rejections. The full offline
+  suite passed 493 tests plus 9 subtests; Ruff check and formatting passed.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

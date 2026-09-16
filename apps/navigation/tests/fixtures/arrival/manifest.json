@@ -113,6 +113,57 @@
           }
         }
       ]
+    },
+    {
+      "name": "non_kitchen_011",
+      "goal": "kitchen",
+      "repetitions": 3,
+      "expected": {
+        "destination_visible": false,
+        "inside_destination": false
+      },
+      "views": [
+        {
+          "label": "front",
+          "file": "non_kitchen_011-1.jpg",
+          "jpeg_sha256": "90cba62af0ed1587a90203262a539303cae066edc85f99af154387e464495826",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T233127Z-9356b698/arrival-02-front.jpg",
+            "source_sha256": "90cba62af0ed1587a90203262a539303cae066edc85f99af154387e464495826",
+            "conversion": "unchanged JPEG bytes"
+          }
+        },
+        {
+          "label": "left45",
+          "file": "non_kitchen_011-2.jpg",
+          "jpeg_sha256": "33357174c96440b261ada3f44b2e5e740e48bef7a346449f6476e4380f3c202b",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T233127Z-9356b698/arrival-02-left45.jpg",
+            "source_sha256": "33357174c96440b261ada3f44b2e5e740e48bef7a346449f6476e4380f3c202b",
+            "conversion": "unchanged JPEG bytes"
+          }
+        },
+        {
+          "label": "right45",
+          "file": "non_kitchen_011-3.jpg",
+          "jpeg_sha256": "3a7905d46bf0cd1c5d2c3f1cbd1a8793b68f4b16afa9aa3c0266f25a3009d669",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T233127Z-9356b698/arrival-02-right45.jpg",
+            "source_sha256": "3a7905d46bf0cd1c5d2c3f1cbd1a8793b68f4b16afa9aa3c0266f25a3009d669",
+            "conversion": "unchanged JPEG bytes"
+          }
+        },
+        {
+          "label": "front_final",
+          "file": "non_kitchen_011-4.jpg",
+          "jpeg_sha256": "58d3cb6f70aedbed2e415e196e9388c0fcb39ec6ac042a5e2ed39247241ada8f",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T233127Z-9356b698/arrival-02-front_final.jpg",
+            "source_sha256": "58d3cb6f70aedbed2e415e196e9388c0fcb39ec6ac042a5e2ed39247241ada8f",
+            "conversion": "unchanged JPEG bytes"
+          }
+        }
+      ]
     }
   ]
 }

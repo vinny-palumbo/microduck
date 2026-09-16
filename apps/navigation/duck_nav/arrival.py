@@ -19,6 +19,17 @@ entered it? Report destination_visible only when distinctive visible features id
 Plain walls, floor patches, rectangles, or colors alone are not appliances, cabinets,
 counters, sinks, or other destination-specific objects.
 
+For a kitchen goal, require at least one identifiable kitchen-specific fixture, grounded in
+its visible functional features: an oven door/window and handle, a cooktop with burners or
+controls, a sink basin together with a faucet, or a refrigerator with recognizable appliance
+doors and hardware. Name the fixture, the identifying features, and the view that shows them.
+Cabinets, storage boxes, countertops, tables, and shelves occur in other rooms; they are only
+supporting evidence and cannot establish a kitchen by themselves. A plain block is not a
+refrigerator or oven, a flat surface is not a kitchen counter, and a small upright shape is
+not a faucet without a visible sink. Do not infer hidden appliances from the goal or furniture.
+If no kitchen-specific fixture can be identified, destination_visible=false and
+inside_destination=false, even if the robot is clearly inside some room.
+
 inside_destination requires clear visual evidence that the robot's BODY has crossed the
 entrance plane with room to spare. The camera is on a projecting, movable head: having the
 image center, camera, or visible floor inside the room does not prove the body entered.

@@ -1,7 +1,7 @@
 """Manually check arrival perception against recorded simulator images.
 
 Run `uv run python scripts/validate_arrival.py` from apps/navigation. This makes
-five real provider requests using the saved Gemini key and records the results
+eight real provider requests using the saved Gemini key and records the results
 under runs/. It never connects to a robot. Normal pytest runs use no network.
 Expected outcomes and source provenance remain local to this scorer; the reviewer
 receives only each case's goal, view labels, and the exact checked JPEG bytes.

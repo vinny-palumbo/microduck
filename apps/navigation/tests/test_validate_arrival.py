@@ -18,8 +18,13 @@ def validation():
 
 def test_bundled_images_are_small_valid_jpegs_with_checked_provenance(validation):
     cases = validation["load_cases"]()
-    assert [case["name"] for case in cases] == ["doorway_008", "interior", "wall_004"]
-    assert sum(case["repetitions"] for case in cases) == 5
+    assert [case["name"] for case in cases] == [
+        "doorway_008",
+        "interior",
+        "wall_004",
+        "non_kitchen_011",
+    ]
+    assert sum(case["repetitions"] for case in cases) == 8
     assert sum(len(view["jpeg"]) for case in cases for view in case["model_views"]) < 1_000_000
     for case in cases:
         for view, source in zip(case["model_views"], case["views"], strict=True):
@@ -52,15 +57,16 @@ async def test_provider_receives_only_goal_labels_and_exact_images(validation):
 
     report = await validation["evaluate"](Reviewer(), cases, emitted.append)
     assert report["all_passed"] is True
-    assert len(calls) == len(report["results"]) == len(emitted) == 5
+    assert len(calls) == len(report["results"]) == len(emitted) == 8
     assert all("PASS" in line for line in emitted)
     # The local report retains labels/provenance for auditing, without image bytes.
     assert "jpeg_sha256" in json.dumps(report)
     assert "expected" in report["results"][0]
 
 
-@pytest.mark.parametrize("case_index", [0, 1, 2])
-async def test_wrong_perception_fails_the_local_scorer(validation, case_index):
+@pytest.mark.parametrize("case_index", [0, 1, 2, 3])
+@pytest.mark.parametrize("field", ["destination_visible", "inside_destination"])
+async def test_wrong_perception_fails_the_local_scorer(validation, case_index, field):
     case = validation["load_cases"]()[case_index]
     case["repetitions"] = 1
 
@@ -70,7 +76,7 @@ async def test_wrong_perception_fails_the_local_scorer(validation, case_index):
         async def review(self, goal, views):
             return {
                 **case["expected"],
-                "inside_destination": not case["expected"]["inside_destination"],
+                field: not case["expected"][field],
                 "evidence": "Contradictory assessment",
                 "uncertainty": "Unknown",
             }
@@ -92,7 +98,7 @@ async def test_provider_failure_is_redacted_and_does_not_skip_other_cases(valida
 
     report = await validation["evaluate"](Reviewer(), validation["load_cases"](), messages.append)
     assert report["all_passed"] is False
-    assert len(calls) == 5
+    assert len(calls) == 8
     assert all(result["error_type"] == "RuntimeError" for result in report["results"])
     assert "DO_NOT_PRINT" not in json.dumps(report) + repr(messages)
 
