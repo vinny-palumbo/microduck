@@ -93,6 +93,10 @@ Current integration evidence:
   remained rejected. The diagnostic saves prompt/image hashes and responses in
   `runs/arrival-geometry-regression.json`. This five-case perception check does not replace
   an independently scored navigation run.
+- The same five provider checks passed through the committed manual diagnostic
+  `scripts/validate_arrival.py`, recorded in `runs/arrival-validation-20260916T231917720510Z.json`.
+  Its eight JPEG fixtures and checksum manifest are versioned, so the perception cases can
+  be repeated from a fresh checkout. Expected outcomes and provenance remain local to the scorer.
 - The active-motion spoken-stop diagnostic in `runs/20260916T225938Z-323e2a10` failed:
   a valid synthesized “Stop” WAV began during an actual model-selected walking command,
   but no stop transcription arrived before the 120 s diagnostic deadline. The initial kitchen

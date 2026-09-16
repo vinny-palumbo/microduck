@@ -1,0 +1,118 @@
+{
+  "description": "Recorded simulator camera images; expected labels and provenance are scorer-only and must never be sent to a model.",
+  "cases": [
+    {
+      "name": "doorway_008",
+      "goal": "kitchen",
+      "repetitions": 3,
+      "expected": {
+        "destination_visible": true,
+        "inside_destination": false
+      },
+      "views": [
+        {
+          "label": "front",
+          "file": "doorway_008-1.jpg",
+          "jpeg_sha256": "6305affc92ce4622a0d1365049a1ba46b03789fad63432a28ab65514075963a3",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T230525Z-dbf9fd18/arrival-01-front.jpg",
+            "source_sha256": "6305affc92ce4622a0d1365049a1ba46b03789fad63432a28ab65514075963a3",
+            "conversion": "unchanged JPEG bytes"
+          }
+        },
+        {
+          "label": "left45",
+          "file": "doorway_008-2.jpg",
+          "jpeg_sha256": "4276428b415ee9f091b8264e70ac53d889e79dcfc7e7928a4ac30bb2c2d7f293",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T230525Z-dbf9fd18/arrival-01-left45.jpg",
+            "source_sha256": "4276428b415ee9f091b8264e70ac53d889e79dcfc7e7928a4ac30bb2c2d7f293",
+            "conversion": "unchanged JPEG bytes"
+          }
+        },
+        {
+          "label": "right45",
+          "file": "doorway_008-3.jpg",
+          "jpeg_sha256": "55985a95ea6c25fcb3601a5a26d00fa742db611193ed11dc3b9d6570538609db",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T230525Z-dbf9fd18/arrival-01-right45.jpg",
+            "source_sha256": "55985a95ea6c25fcb3601a5a26d00fa742db611193ed11dc3b9d6570538609db",
+            "conversion": "unchanged JPEG bytes"
+          }
+        },
+        {
+          "label": "front_final",
+          "file": "doorway_008-4.jpg",
+          "jpeg_sha256": "91724e2003f6188fad68754736df55148e18296a9a947147da2077d90d01dae5",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T230525Z-dbf9fd18/arrival-01-front_final.jpg",
+            "source_sha256": "91724e2003f6188fad68754736df55148e18296a9a947147da2077d90d01dae5",
+            "conversion": "unchanged JPEG bytes"
+          }
+        }
+      ]
+    },
+    {
+      "name": "interior",
+      "goal": "kitchen",
+      "repetitions": 1,
+      "expected": {
+        "destination_visible": true,
+        "inside_destination": true
+      },
+      "views": [
+        {
+          "label": "front",
+          "file": "interior-1.jpg",
+          "jpeg_sha256": "025fb6034367e4a5a445dc770be4db578a923e5733156a8b9c0529918c8517b9",
+          "provenance": {
+            "source_file": "microduck_rl/artifacts/navigation/arrival-fixture/front.png",
+            "source_sha256": "914e7c79cfce06341409b7130ee540316c76261cb87d187acb82008903fbf5d8",
+            "conversion": "Pillow JPEG quality=85"
+          }
+        },
+        {
+          "label": "left",
+          "file": "interior-2.jpg",
+          "jpeg_sha256": "efadfb7ebb33f8d5488e582246d64bb14fef6e17ab87f646cb22ba9ab942ff8f",
+          "provenance": {
+            "source_file": "microduck_rl/artifacts/navigation/arrival-fixture/left.png",
+            "source_sha256": "833882fa2f31dab4f7ab48ad99ae82a74e1dfe5a10e1d9000b6d3e2aca255eaf",
+            "conversion": "Pillow JPEG quality=85"
+          }
+        },
+        {
+          "label": "right",
+          "file": "interior-3.jpg",
+          "jpeg_sha256": "a93f9e918212fb4ff3d01fdecb48e6c142109e7e39b107722f23cca58b5319cf",
+          "provenance": {
+            "source_file": "microduck_rl/artifacts/navigation/arrival-fixture/right.png",
+            "source_sha256": "e5ce4104e04917494c90ff7fb1040dde1b0f318e19dcb7641261ef7e98a26366",
+            "conversion": "Pillow JPEG quality=85"
+          }
+        }
+      ]
+    },
+    {
+      "name": "wall_004",
+      "goal": "kitchen",
+      "repetitions": 1,
+      "expected": {
+        "destination_visible": false,
+        "inside_destination": false
+      },
+      "views": [
+        {
+          "label": "current forward view",
+          "file": "wall_004-1.jpg",
+          "jpeg_sha256": "e218704566c34ba1a97d528a3a637ea10003dc61c433e1ffaf19ea998e6a4b04",
+          "provenance": {
+            "source_file": "microduck/apps/navigation/runs/20260916T222047Z-c5e37668/frame-0030.jpg",
+            "source_sha256": "e218704566c34ba1a97d528a3a637ea10003dc61c433e1ffaf19ea998e6a4b04",
+            "conversion": "unchanged JPEG bytes"
+          }
+        }
+      ]
+    }
+  ]
+}

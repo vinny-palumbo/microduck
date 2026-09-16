@@ -229,6 +229,17 @@ The model does not receive that
 information. A successful replayed speech test, a successful live-microphone test, and successful
 physical-robot navigation are distinct evidence and should be reported separately.
 
+To repeat the visual arrival checks without connecting to a robot:
+
+```sh
+cd ~/Pollen/microduck/apps/navigation
+uv run python scripts/validate_arrival.py
+```
+
+This makes five provider requests against versioned doorway, interior, and wall images, verifies
+their checksums, and saves a JSON report under `runs/`. Expected verdicts and source provenance
+stay in the local scorer; the model receives only the destination and camera images.
+
 To test cancellation during motion, start a fresh local simulator and run:
 
 ```sh
