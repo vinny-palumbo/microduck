@@ -151,7 +151,7 @@ uv run duck-agent "Inspect the room" --scripted examples/inspect.json
 uv run duck-agent "Try a short forward move and report if stuck" --scripted examples/stuck.json
 ```
 
-The first checks gaze/observation/finish plumbing (current optical alignment can time out);
+The first checks gaze/observation/finish plumbing;
 the second exercises negligible-progress
 handling on the current simulator gait. Expected exit is 2 for these blocked outcomes.
 `model: scripted-fixture` in the recording identifies these as plumbing tests, not evidence
@@ -167,8 +167,10 @@ model testing.
   under-tracking gait returns an incomplete result with the measured angle; it is not retried
   automatically.
 - Gaze preserves commanded neck posture, distinguishes policy offsets from absolute joint
-  targets, and checks measured camera direction plus head-joint alignment before accepting a
-  subsequent camera frame. Neck tracking bias cannot accumulate through repeated looks.
+  targets, and uses bounded feedback to correct measured camera direction. Aim must remain
+  within 0.10 radians for 0.15 seconds, with a subsequent fresh camera frame. Neck tracking
+  bias cannot accumulate through repeated looks. Each action has a two-second budget;
+  correction displacement is capped at 35% of the original target distance.
 - Camera, robot state, depth, and health must be fresh. Repeated source timestamps do not count
   as new sensor observations. Missing or malformed data refuses movement.
 - Obstacle checks use the published ToF beam directions and current sensor pose, distinguish
@@ -246,3 +248,35 @@ as a separate locomotion diagnostic; precision turns do not gate testing the vis
 Improve locomotion only through a separately scoped investigation. Do not enlarge guard limits
 or retrain a policy simply to make a visual-agent demo appear successful. Reliable arrival will
 need demonstrable movement and independent scoring when that milestone is attempted.
+
+## Measure gaze and forward response
+
+With the local flat simulator running and no other controller:
+
+```sh
+uv run python scripts/calibrate_gaze.py
+```
+
+This requests ten head-only looks across forward, left, right and upward targets. Each result
+records optical error, correction count, preserved neck command and camera frames; `gaze.json`
+reports whether every target completed. Feedback adjusts a virtual target passed to the
+daemon's IK every 0.25 seconds using half the measured direction error. The original target
+is always the success criterion; daemon travel limits still apply. Correction-limit, clamp,
+stale-data and timeout failures request stop. This uses measured joint-derived camera poses,
+not visual feature matching, so it does not independently validate physical camera calibration.
+
+Restart the simulator to reset placement before the separate forward diagnostic:
+
+```sh
+uv run python scripts/calibrate_forward.py
+```
+
+This simulator-only script runs up to three sequential 0.30 m/s probes after recentering, with
+ordinary sensor guards, a 1.5-second command cap, and stop requests at 50 mm odometry or 10°
+heading excursion. It reads MuJoCo truth for evaluation only. The model cannot request this
+speed. Stops can overshoot; these are diagnostic cutoffs, not movement guarantees.
+A battery passes only if all three reach the distance cutoff, settled travel is within
+50 ± 20 mm, settled heading change is at most 10°, and stop/zero-command checks pass.
+It aborts after a guard refusal or excessive settled heading change; exit 1 means failure.
+`forward-summary.json` and frame/event recordings retain the evidence. These initial
+acceptance thresholds are diagnostic, not sufficient certification for navigation.

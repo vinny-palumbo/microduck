@@ -7,6 +7,7 @@ import json
 import math
 import time
 import unittest
+from dataclasses import replace
 
 from duck_nav.core import GuardConfig, GuardedRobot
 
@@ -147,6 +148,7 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
                 initial_sensor_timeout_s=0.1,
                 turn_timeout_s=0.3,
                 look_min_hold_s=0.04,
+                look_settle_s=0.02,
                 look_timeout_s=0.12,
             ),
         )
@@ -250,19 +252,16 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(self.transport.head_pulses), 1)
         self.assertEqual(self.transport.moving_pulses(), [])
 
-    async def test_look_waits_for_measured_joints_and_fresh_camera(self):
-        self.transport.state["joints"][1] = 0.5
+    async def test_look_waits_for_measured_aim_and_fresh_camera(self):
+        self.transport.state["frames"]["camera"]["quat"] = [1, 0, 0, 0]
         self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "look_timeout")
-        self.transport.state["joints"][1] = 0.3491
+        self.transport.state["frames"]["camera"]["quat"] = [math.sqrt(0.5), 0, math.sqrt(0.5), 0]
         self.transport.frozen.add("camera")
         self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "stale_camera")
 
-    async def test_look_resends_offsets_but_settles_against_absolute_joints(self):
-        # The simulator's head policy adds HOME pitch to the command. Zero
-        # measured pitch is therefore not settled for a zero-offset command.
+    async def test_look_resends_offsets_but_settles_against_measured_camera(self):
+        # Joint tracking bias is acceptable only when measured camera aim is correct.
         self.transport.state["joints"][1] = 0
-        self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "look_timeout")
-        self.transport.state["joints"][1] = 0.3491
         self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "gaze_settled")
         self.assertTrue(self.transport.head_pulses)
         self.assertTrue(all(params["head_pitch"] == 0 for _, params in self.transport.head_pulses))
@@ -289,6 +288,45 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_joint_alignment_alone_does_not_prove_camera_aim(self):
         self.transport.state["frames"]["camera"]["quat"] = [1, 0, 0, 0]
         self.assertEqual((await self.robot.look_at(1, 0, 0))["reason"], "look_timeout")
+
+    async def test_feedback_converges_without_changing_neck(self):
+        self.robot.config = replace(self.robot.config, look_feedback_period_s=0.01)
+        angle = math.pi / 2 - 0.2
+        self.transport.state["frames"]["camera"]["quat"] = [
+            math.cos(angle / 2),
+            0,
+            math.sin(angle / 2),
+            0,
+        ]
+        original = self.transport.request
+
+        async def respond(method, params=None):
+            result = await original(method, params)
+            if method == "robot.look" and params["z"] < 0:
+                self.transport.state["frames"]["camera"]["quat"] = [
+                    math.sqrt(0.5),
+                    0,
+                    math.sqrt(0.5),
+                    0,
+                ]
+            return result
+
+        self.transport.request = respond
+        outcome = await self.robot.look_at(1, 0, 0)
+        self.assertTrue(outcome["completed"])
+        self.assertEqual(outcome["corrections"], 1)
+        self.assertEqual(outcome["aim_error_rad"], 0)
+        requests = [p for method, p in self.transport.calls if method == "robot.look"]
+        self.assertTrue(all(p["neck_pitch"] == 0.3491 for p in requests))
+        self.assertEqual(self.transport.moving_pulses(), [])
+
+    async def test_feedback_stops_at_correction_limit(self):
+        self.robot.config = replace(self.robot.config, look_feedback_period_s=0.01)
+        self.transport.state["frames"]["camera"]["quat"] = [1, 0, 0, 0]
+        outcome = await self.robot.look_at(1, 0, 0)
+        self.assertEqual(outcome["reason"], "look_correction_limit")
+        self.assertTrue(outcome["stop"]["acknowledged"])
+        self.assertEqual(outcome["corrections"], 0)
 
     async def test_look_requires_home_command_and_camera_contract(self):
         for field in ("joint_home", "head", "camera"):

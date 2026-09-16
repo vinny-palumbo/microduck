@@ -307,9 +307,54 @@ Regression validation: 95 Python tests plus 9 subtests passed; Ruff passed. Rust
 tracking bias, preserving nonzero posture, missing contract fields and rejecting a misaligned
 camera even when joint checks pass.
 
-The next experiment should close and validate the gaze feedback loop while preserving neck
-posture. Only then calibrate a short forward primitive across repeated trials, including
-heading drift and stopping overshoot, before exposing an effective speed to the visual agent.
+The follow-up below tests gaze feedback and short forward response. Effective speed remains
+unavailable to the visual agent pending repeatable heading and stopping control.
+
+## Bounded gaze feedback and forward response
+
+Gaze now adjusts a virtual IK target using half the measured optical direction error every
+0.25 seconds. It preserves the neck command, caps target displacement at 35% of original
+target distance, and retains a two-second budget. Success requires measured aim within the
+unchanged 0.10-radian tolerance continuously for 0.15 seconds plus a fresh camera frame.
+The original requested point is the success criterion, not the adjusted IK point. Joint-target
+tracking is no longer a separate success condition: the daemon's measured-joint camera FK
+already determines whether the camera is aligned. This is kinematic feedback, not independent
+image-based calibration. Returned results include `aim_error_rad` and correction count.
+
+`20260916T192130Z-be03911f/gaze.json`: all ten head-only tests passed (two passes through
+forward, left, right, upward and forward targets). Calls took 1.13-1.35 seconds, used three or
+four corrections, and finished with roughly 0.065-0.073 radians of error. All preserved zero
+neck offset and acknowledged stop. `scripts/calibrate_gaze.py` reproduces this battery.
+
+A preliminary sequential forward run (`20260916T192157Z-2cb6b181/forward.json`) produced
+63.0 and 64.0 mm settled displacement at a 50 mm odometry stop cutoff, with -4.4 and -10.8
+degrees heading change. A third attempt stopped on the obstacle guard and settled at 44.6 mm.
+This run exposed heading overshoot as well as distance overshoot.
+
+After resetting the flat simulator, `scripts/calibrate_forward.py` recorded
+`20260916T192402Z-7d19aa2c/forward-summary.json`. The first probe exhausted its 1.5-second
+budget without reaching the odometry cutoff; settled truth displacement was 53.5 mm with
+-5.3 degrees heading change. The second reached the cutoff but settled at 62.3 mm with
+-14.5 degrees heading change, so the battery aborted and exited 1. Both acknowledged stop,
+with zero requested velocity and applied velocity below 0.001 after the settling wait.
+
+The diagnostic's provisional pass criterion is three distance-cutoff stops, settled travel
+50 +/- 20 mm, heading change at most 10 degrees, and acknowledged/zero-command stops. It
+failed. Runtime observation and settled truth differ; a stop cutoff is not a guarantee on
+final travel or heading. No model speed limit, policy, actuator, or training changes were made.
+
+Live Gemini inspection `20260916T192433Z-66c64fad/mission.json` also completed: the model
+looked left, recentered, then finished after three decisions in 10.58 seconds. Both gaze
+actions settled, stop was acknowledged, and no body movement was requested. Its scene
+description remains a model assessment (`goal_verified: false`), not an arrival result.
+
+Validation: 97 Python tests plus 9 subtests passed, including correction convergence without
+neck changes, bounded correction refusal and measured-camera completion despite joint bias.
+Ruff passed. Rust code and the API 30 wire contract are unchanged in this follow-up.
+
+Next locomotion work should diagnose heading drift and command-to-settled-motion response
+using this reproducible benchmark before enabling a faster model action. Successful gaze
+alone does not establish reliable room navigation.
 
 ## Remaining limits
 

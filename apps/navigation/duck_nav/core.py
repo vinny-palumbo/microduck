@@ -80,8 +80,11 @@ class GuardConfig:
     turn_no_progress_s: float = 0.5
     turn_tolerance_deg: float = 2.0
     look_min_hold_s: float = 0.4
-    look_timeout_s: float = 1.0
-    look_joint_tolerance_rad: float = 0.10
+    look_timeout_s: float = 2.0
+    look_feedback_period_s: float = 0.25
+    look_feedback_gain: float = 0.5
+    look_max_correction_ratio: float = 0.35
+    look_settle_s: float = 0.15
     look_direction_tolerance_rad: float = 0.10
     obstacle_distance_m: float = 0.35
     min_loop_hz: float = 40.0
@@ -96,6 +99,10 @@ class GuardConfig:
             raise ValueError("this prototype permits at most 0.1 m/s, 2 seconds, and 30 degrees")
         if self.turn_rate_rad_s > 0.3 or self.turn_timeout_s > 5:
             raise ValueError("turn rate/duration exceeds the prototype bounds")
+        if self.look_feedback_gain > 0.5 or self.look_max_correction_ratio > 0.35:
+            raise ValueError("gaze feedback exceeds prototype correction bounds")
+        if self.look_settle_s >= self.look_timeout_s:
+            raise ValueError("gaze settling must fit inside timeout")
         if not self.look_min_hold_s < self.look_timeout_s <= 2:
             raise ValueError("look hold must fit within a bounded two-second timeout")
 
@@ -481,6 +488,7 @@ class GuardedRobot:
         started = time.monotonic()
         before = None
         reason, completed, reply, camera_sequence = "look_timeout", False, None, None
+        aim_error, corrections = None, 0
         try:
             before = self._odom(self.transport.snapshot())
             reason = self._base_guard(self.transport.snapshot())
@@ -507,11 +515,14 @@ class GuardedRobot:
             params["neck_pitch"] = home[neck_index] + command[0]
             reply = await self._request("robot.look", params)
             requested_at, settled_at = time.monotonic(), None
+            last_adjusted = requested_at
+            virtual_point = point.copy()
             head = {
                 key: _number(reply["head"][key])
                 for key in ("neck_pitch", "head_pitch", "head_yaw", "head_roll")
             }
-            joint_targets = {key: _number(reply["joint_targets"][key]) for key in head}
+            for key in head:
+                _number(reply["joint_targets"][key])
             while True:
                 if cancel.is_set():
                     reason = "stopped"
@@ -522,35 +533,26 @@ class GuardedRobot:
                     break
                 now = time.monotonic()
                 state = snapshot["state"]["data"]
-                # head holds HOME-relative commands. Measured joints and the
-                # IK joint_targets are absolute; comparing against head would
-                # mistake the head's rest pitch offset for a tracking error.
-                measured = {
-                    name: _number(value)
-                    for name, value in zip(self.model["joint_names"], state["joints"])
-                }
-                reached = all(
-                    abs(measured[name] - target) <= self.config.look_joint_tolerance_rad
-                    for name, target in joint_targets.items()
-                    if name != "neck_pitch"
-                )
-                # Neck position is held by the gait and can have a steady tracking
-                # bias. The measured camera ray, not exact neck tracking, decides
-                # whether the requested point is actually in view.
+                # FK is based on measured joints. Stable optical alignment is
+                # authoritative even when the gait has a joint tracking bias.
                 camera = state["frames"]["camera"]
                 optical = _rotate(_unit(camera["quat"], 4), [0.0, 0.0, 1.0])
                 origin = _vector(camera["pos"], 3)
                 delta = [target - start for target, start in zip(point, origin)]
                 distance = math.sqrt(sum(v * v for v in delta))
-                aligned = distance > 1e-6 and sum(
-                    a * b / distance for a, b in zip(optical, delta)
-                ) >= math.cos(self.config.look_direction_tolerance_rad)
-                if reached and aligned:
+                if distance <= 1e-6:
+                    raise ValueError("target coincides with camera")
+                desired = [v / distance for v in delta]
+                cosine = sum(a * b for a, b in zip(optical, desired))
+                aim_error = math.acos(max(-1.0, min(1.0, cosine)))
+                aligned = aim_error <= self.config.look_direction_tolerance_rad
+                if aligned:
                     settled_at = settled_at if settled_at is not None else now
                 else:
                     settled_at = None
                 if (
                     settled_at is not None
+                    and now - settled_at >= self.config.look_settle_s
                     and now - requested_at >= self.config.look_min_hold_s
                     and snapshot["camera"]["received_at"] > settled_at
                 ):
@@ -561,6 +563,32 @@ class GuardedRobot:
                 if now - requested_at >= self.config.look_timeout_s:
                     reason = "look_timeout"
                     break
+                if not aligned and now - last_adjusted >= self.config.look_feedback_period_s:
+                    # Move a virtual IK target opposite the measured optical error.
+                    # IK and travel limits stay daemon-owned; the original target
+                    # remains the only success criterion. Never accumulate posture.
+                    proposed = [
+                        v + self.config.look_feedback_gain * distance * (d - o)
+                        for v, d, o in zip(virtual_point, desired, optical)
+                    ]
+                    correction = math.dist(proposed, point)
+                    limit = self.config.look_max_correction_ratio * math.sqrt(
+                        sum(v * v for v in point)
+                    )
+                    if correction > limit:
+                        reason = "look_correction_limit"
+                        break
+                    virtual_point = proposed
+                    params.update(zip(("x", "y", "z"), virtual_point))
+                    reply = await self._request("robot.look", params)
+                    head = {key: _number(reply["head"][key]) for key in head}
+                    for key in head:
+                        _number(reply["joint_targets"][key])
+                    if reply.get("clamped") is not False:
+                        reason = "look_clamped"
+                        break
+                    corrections += 1
+                    last_adjusted, settled_at = time.monotonic(), None
                 self.transport.notify("robot.head", head)
                 try:
                     await asyncio.wait_for(cancel.wait(), self.config.pulse_period_s)
@@ -590,6 +618,8 @@ class GuardedRobot:
             "after_odom": self._odom(self.transport.snapshot()),
             "result": reply,
             "camera_sequence": camera_sequence,
+            "aim_error_rad": aim_error,
+            "corrections": corrections,
             "stop": stopped,
         }
 
