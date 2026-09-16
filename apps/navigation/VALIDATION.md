@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 315 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 337 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -60,6 +60,15 @@ Current integration evidence:
   Tests cover goal retention, tool restrictions, cancellation during planning, arrival-review
   feedback, and rejection of raw simulator truth. This does not itself establish a completed
   navigation route.
+- Delegated run `runs/20260916T223657Z-36e766ed` travelled 1.613 m net and stored a grounded
+  observation of the kitchen's counter and stove. After 44 tool calls the streaming session
+  stopped requesting the next delegated step, causing the 45 s model timeout. Exact scoring
+  of `voice-mission-006.truth.jsonl` found no arrival, collisions, or falls; camera age stayed
+  below 79 ms and the control loop stayed at 49.65–50.36 Hz. This exposed a coordination
+  dependency rather than a sensor or locomotion failure. The standard planner now runs its own
+  serial loop after goal acceptance. Regression tests cover a silent voice session, a pending
+  goal response, repeated goal confirmation, spoken/tool cancellation during planning and body
+  movement, and the final allowed action settling before budget exhaustion.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

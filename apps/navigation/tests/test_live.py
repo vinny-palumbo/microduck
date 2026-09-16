@@ -1021,20 +1021,7 @@ class VisualPlanner:
         return next(self.decisions)
 
 
-def delegate_next_step(session):
-    async def prompt(_):
-        session.call("navigate", reason="Continue the user's accepted goal")
-
-    async def response(response):
-        result = response["response"]
-        if result.get("navigation_tool") != "finish" or result.get("continue_navigation"):
-            await prompt(None)
-            await asyncio.sleep(0)
-
-    session.on_prompt, session.on_response = prompt, response
-
-
-async def test_delegated_visual_steps_report_actual_actions_and_finish(tmp_path, fast_images):
+async def test_autonomous_visual_steps_finish_without_voice_calls_or_replies(tmp_path, fast_images):
     session = Session()
     planner = VisualPlanner(
         [
@@ -1043,7 +1030,6 @@ async def test_delegated_visual_steps_report_actual_actions_and_finish(tmp_path,
             {"name": "finish", "args": {"status": "goal_observed", "reason": "Inside beside sink"}},
         ]
     )
-    delegate_next_step(session)
     result, robot, recorder = await run(
         tmp_path,
         session,
@@ -1053,14 +1039,10 @@ async def test_delegated_visual_steps_report_actual_actions_and_finish(tmp_path,
     assert result["status"] == "goal_observed"
     assert result["navigation_model"] == "visual-fixture"
     assert result["actions"] == 3
+    assert result["navigation_actions"] == 3
     assert robot.calls == ["stop", "look_at", "advance", "stop"]
-    assert [
-        r["function_responses"][0]["response"]["navigation_tool"] for r in session.responses
-    ] == [
-        "look_at",
-        "advance",
-        "finish",
-    ]
+    assert not session.responses
+    assert not session.prompts
     assert all(context["goal"] == "Go to the kitchen" for context in planner.contexts)
     assert planner.contexts[-1]["recent_actions"][-1]["tool"] == "advance"
     assert all(jpeg.startswith(b"\xff\xd8") for jpeg in planner.images)
@@ -1068,29 +1050,38 @@ async def test_delegated_visual_steps_report_actual_actions_and_finish(tmp_path,
     events = (recorder.path / "events.jsonl").read_text()
     assert events.count('"event": "visual_decision"') == 3
     assert '"navigation_model": "visual-fixture"' in events
+    outcomes = [json.loads(line) for line in events.splitlines()]
+    assert [
+        event["result"]["navigation_tool"]
+        for event in outcomes
+        if event["event"] == "tool_finished" and event["source"] == "navigation"
+    ] == ["look_at", "advance", "finish"]
 
 
-async def test_voice_description_cannot_replace_goal_or_instruct_visual_planner(
-    tmp_path, fast_images
-):
+async def test_voice_cannot_replace_active_goal_or_instruct_visual_planner(tmp_path, fast_images):
     session = Session()
-    planner = VisualPlanner(
-        [
-            {"name": "finish", "args": {"status": "blocked", "reason": "Only a wall is visible"}},
-        ]
-    )
+    entered, received = asyncio.Event(), asyncio.Event()
 
-    async def prompt(_):
-        session.call("start_navigation", goal="A different goal invented by the voice model")
+    class Planner(VisualPlanner):
+        async def decide(self, context, jpeg):
+            entered.set()
+            await received.wait()
+            return await super().decide(context, jpeg)
+
+    planner = Planner(
+        [{"name": "finish", "args": {"status": "blocked", "reason": "Only a wall is visible"}}]
+    )
 
     async def response(response):
         if response["name"] == "start_navigation":
-            session.call(
-                "navigate", reason="INVENTED_ISLAND_FROM_VOICE must be treated as the goal"
-            )
+            assert response["response"]["already_active"] is True
+            received.set()
 
-    session.on_prompt, session.on_response = prompt, response
-    result, _, _ = await run(tmp_path, session, goal="Kitchen", navigation_planner=planner)
+    session.on_response = response
+    task = asyncio.create_task(run(tmp_path, session, goal="Kitchen", navigation_planner=planner))
+    await asyncio.wait_for(entered.wait(), 1)
+    session.call("start_navigation", goal="INVENTED_ISLAND_FROM_VOICE must be treated as the goal")
+    result, _, _ = await asyncio.wait_for(task, 1)
     assert result["goal"] == "Kitchen"
     assert planner.contexts[0]["goal"] == "Kitchen"
     assert "INVENTED_ISLAND_FROM_VOICE" not in json.dumps(planner.contexts)
@@ -1108,7 +1099,6 @@ async def test_voice_description_cannot_replace_goal_or_instruct_visual_planner(
 )
 async def test_invalid_standard_decision_never_dispatches_motion(tmp_path, fast_images, decision):
     session = Session()
-    delegate_next_step(session)
     result, robot, _ = await run(
         tmp_path,
         session,
@@ -1119,21 +1109,21 @@ async def test_invalid_standard_decision_never_dispatches_motion(tmp_path, fast_
     assert robot.calls == ["stop", "stop"]
 
 
-async def test_voice_cannot_bypass_navigation_delegation(tmp_path, fast_images):
+@pytest.mark.parametrize("tool", ["advance", "navigate", "say"])
+async def test_voice_cannot_control_visual_actions(tmp_path, fast_images, tool):
     session = Session()
-
-    async def prompt(_):
-        session.call("advance", distance_m=0.1, reason="Voice model tries direct movement")
-
-    session.on_prompt = prompt
+    session.call(tool, reason="Voice model tries visual control")
     planner = VisualPlanner([])
-    result, robot, _ = await run(tmp_path, session, goal="Kitchen", navigation_planner=planner)
+    result, robot, _ = await run(
+        tmp_path, session, audio=silent_audio(), navigation_planner=planner
+    )
     assert result["status"] == "error"
     assert not planner.contexts
     assert robot.calls == ["stop", "stop"]
 
 
-async def test_spoken_stop_cancels_pending_standard_planner(tmp_path, fast_images):
+@pytest.mark.parametrize("cancellation", ["spoken", "stop_tool", "disconnect"])
+async def test_stop_cancels_pending_standard_planner(tmp_path, fast_images, cancellation):
     entered, cancelled = asyncio.Event(), asyncio.Event()
 
     class WaitingPlanner:
@@ -1147,19 +1137,23 @@ async def test_spoken_stop_cancels_pending_standard_planner(tmp_path, fast_image
                 cancelled.set()
 
     session = Session()
-    delegate_next_step(session)
     task = asyncio.create_task(
         run(tmp_path, session, goal="Kitchen", navigation_planner=WaitingPlanner())
     )
     await asyncio.wait_for(entered.wait(), 1)
-    session.push({"server_content": {"input_transcription": {"text": "Stop"}}})
+    if cancellation == "spoken":
+        session.push({"server_content": {"input_transcription": {"text": "Stop"}}})
+    elif cancellation == "stop_tool":
+        session.call("stop", reason="User asked to stop")
+    else:
+        session.push(ConnectionError("Voice session lost"))
     result, robot, _ = await asyncio.wait_for(task, 0.5)
-    assert result["status"] == "cancelled"
+    assert result["status"] == ("error" if cancellation == "disconnect" else "cancelled")
     assert cancelled.is_set()
     assert robot.calls == ["stop", "stop"]
 
 
-async def test_delegated_rejected_arrival_continues_with_review_context(tmp_path, fast_images):
+async def test_autonomous_rejected_arrival_continues_with_review_context(tmp_path, fast_images):
     session, reviewer = Session(), ArrivalReviewer([False])
     planner = VisualPlanner(
         [
@@ -1168,8 +1162,7 @@ async def test_delegated_rejected_arrival_continues_with_review_context(tmp_path
             {"name": "finish", "args": {"status": "blocked", "reason": "No further safe route"}},
         ]
     )
-    delegate_next_step(session)
-    result, robot, _ = await run(
+    result, robot, recorder = await run(
         tmp_path,
         session,
         goal="Kitchen",
@@ -1181,16 +1174,228 @@ async def test_delegated_rejected_arrival_continues_with_review_context(tmp_path
     assert robot.calls.count("advance") == 1
     assert planner.contexts[1]["arrival_claims"] == 1
     assert planner.contexts[1]["arrival_review"]["inside_destination"] is False
-    assert session.responses[0]["function_responses"][0]["response"]["continue_navigation"] is True
+    outcomes = [
+        json.loads(line)
+        for line in (recorder.path / "events.jsonl").read_text().splitlines()
+        if '"event": "tool_finished"' in line
+    ]
+    assert outcomes[0]["result"]["continue_navigation"] is True
 
 
-def test_standard_mode_exposes_only_voice_delegation_tools():
+async def test_spoken_goal_starts_navigation_while_voice_tool_response_is_pending(
+    tmp_path, fast_images
+):
+    session = Session()
+    planner = VisualPlanner(
+        [
+            {"name": "advance", "args": {"distance_m": 0.1, "reason": "Clear floor"}},
+            {"name": "finish", "args": {"status": "blocked", "reason": "No onward route"}},
+        ]
+    )
+
+    async def audio(_):
+        session.call("start_navigation", goal="Go to the kitchen")
+
+    async def response(_):
+        await asyncio.Event().wait()
+
+    session.on_audio, session.on_response = audio, response
+    result, robot, _ = await asyncio.wait_for(
+        run(tmp_path, session, audio=silent_audio(), navigation_planner=planner),
+        1,
+    )
+    assert result["status"] == "blocked"
+    assert result["goal"] == "Go to the kitchen"
+    assert result["actions"] == 3  # One voice acceptance and two visual decisions.
+    assert result["navigation_actions"] == 2
+    assert robot.calls == ["stop", "advance", "stop"]
+
+
+async def test_standard_motion_is_serial_while_voice_can_confirm_existing_goal(
+    tmp_path, fast_images
+):
+    robot, session = Robot(), Session()
+    robot.advance_release = asyncio.Event()
+    responded = asyncio.Event()
+    planner = VisualPlanner(
+        [
+            {"name": "advance", "args": {"distance_m": 0.1, "reason": "First clear step"}},
+            {"name": "advance", "args": {"distance_m": 0.1, "reason": "Next clear step"}},
+            {"name": "finish", "args": {"status": "blocked", "reason": "No onward route"}},
+        ]
+    )
+
+    async def response(_):
+        responded.set()
+
+    session.on_response = response
+    task = asyncio.create_task(
+        run(tmp_path, session, robot, goal="Kitchen", navigation_planner=planner)
+    )
+    await asyncio.wait_for(robot.advance_entered.wait(), 1)
+    session.call("start_navigation", goal="Kitchen again")
+    await asyncio.wait_for(responded.wait(), 1)
+    assert robot.calls == ["stop", "advance"]
+    assert len(planner.contexts) == 1
+    robot.advance_release.set()
+    result, _, recorder = await asyncio.wait_for(task, 1)
+    assert result["status"] == "blocked"
+    assert result["goal"] == "Kitchen"
+    assert result["actions"] == 4
+    assert result["navigation_actions"] == 3
+    assert robot.calls == ["stop", "advance", "advance", "stop"]
+    requested = [
+        json.loads(line)["step"]
+        for line in (recorder.path / "events.jsonl").read_text().splitlines()
+        if '"event": "tool_requested"' in line
+    ]
+    assert requested == [1, 2, 3, 4]
+
+
+@pytest.mark.parametrize("cancellation", ["spoken", "stop_tool", "interrupted"])
+async def test_voice_stop_interrupts_autonomous_body_action(tmp_path, fast_images, cancellation):
+    robot, session = Robot(), Session()
+    robot.advance_release = asyncio.Event()
+    planner = VisualPlanner(
+        [{"name": "advance", "args": {"distance_m": 0.1, "reason": "Clear step"}}]
+    )
+    task = asyncio.create_task(
+        run(tmp_path, session, robot, goal="Kitchen", navigation_planner=planner)
+    )
+    await asyncio.wait_for(robot.advance_entered.wait(), 1)
+    if cancellation == "spoken":
+        session.push({"server_content": {"input_transcription": {"text": "Stop"}}})
+    elif cancellation == "stop_tool":
+        session.call("stop", reason="User asked to stop")
+    else:
+        session.push({"server_content": {"interrupted": True}})
+    result, _, _ = await asyncio.wait_for(task, 0.5)
+    assert result["status"] == "cancelled"
+    assert robot.calls == ["stop", "advance", "stop"]
+    assert robot.distance == 0
+    assert len(planner.contexts) == 1
+
+
+async def test_voice_silence_after_goal_cannot_time_out_autonomous_navigation(
+    tmp_path, fast_images
+):
+    class SlowStep(Robot):
+        async def advance(self, distance_m, heading_deg=0):
+            await asyncio.sleep(0.15)
+            return await super().advance(distance_m, heading_deg)
+
+    session = Session()
+    session.call("start_navigation", goal="Kitchen")
+    planner = VisualPlanner(
+        [
+            {"name": "advance", "args": {"distance_m": 0.1, "reason": "Clear floor"}},
+            {"name": "finish", "args": {"status": "blocked", "reason": "No onward route"}},
+        ]
+    )
+    result, robot, _ = await run(
+        tmp_path,
+        session,
+        SlowStep(),
+        audio=silent_audio(),
+        navigation_planner=planner,
+        config=LiveConfig(model_timeout_s=0.05),
+    )
+    assert result["status"] == "blocked"
+    assert robot.distance == 0.1
+    assert not session.prompts
+
+
+async def test_voice_model_timeout_still_applies_before_goal_acceptance(tmp_path, fast_images):
+    session = Session()
+    session.push({"server_content": {"input_transcription": {"text": "Go to the kitchen"}}})
+    planner = VisualPlanner([])
+    result, robot, _ = await run(
+        tmp_path,
+        session,
+        audio=silent_audio(),
+        navigation_planner=planner,
+        config=LiveConfig(model_timeout_s=0.05),
+    )
+    assert result["status"] == "model_timeout"
+    assert not planner.contexts
+    assert robot.calls == ["stop", "stop"]
+
+
+async def test_autonomous_planner_timeout_stops_mission(tmp_path, fast_images):
+    class SlowPlanner:
+        async def decide(self, context, jpeg):
+            await asyncio.Event().wait()
+
+    result, robot, _ = await run(
+        tmp_path,
+        Session(),
+        goal="Kitchen",
+        navigation_planner=SlowPlanner(),
+        config=LiveConfig(model_timeout_s=0.05),
+    )
+    assert result["status"] == "error"
+    assert robot.calls == ["stop", "stop"]
+
+
+async def test_autonomous_action_budget_bounds_visual_steps(tmp_path, fast_images):
+    planner = VisualPlanner(
+        [{"name": "advance", "args": {"distance_m": 0.1, "reason": "Clear floor"}}] * 3
+    )
+    result, robot, _ = await run(
+        tmp_path,
+        Session(),
+        goal="Kitchen",
+        navigation_planner=planner,
+        config=LiveConfig(max_actions=2),
+    )
+    assert result["status"] == "action_limit"
+    assert result["actions"] == result["navigation_actions"] == 2
+    assert robot.calls == ["stop", "advance", "advance", "stop"]
+    assert len(planner.contexts) == 2
+
+
+async def test_delayed_voice_reply_cannot_cancel_last_allowed_visual_step(tmp_path, fast_images):
+    robot, session = Robot(), Session()
+    robot.advance_release = asyncio.Event()
+    session.call("start_navigation", goal="Kitchen")
+    planner = VisualPlanner(
+        [{"name": "advance", "args": {"distance_m": 0.1, "reason": "One allowed clear step"}}]
+    )
+    reply_sent = asyncio.Event()
+
+    async def response(_):
+        await robot.advance_entered.wait()
+        reply_sent.set()
+
+    session.on_response = response
+    task = asyncio.create_task(
+        run(
+            tmp_path,
+            session,
+            robot,
+            audio=silent_audio(),
+            navigation_planner=planner,
+            config=LiveConfig(max_actions=2),
+        )
+    )
+    await asyncio.wait_for(reply_sent.wait(), 1)
+    await asyncio.sleep(0)
+    assert not task.done()
+    robot.advance_release.set()
+    result, _, _ = await asyncio.wait_for(task, 1)
+    assert result["status"] == "action_limit"
+    assert result["actions"] == 2
+    assert result["navigation_actions"] == 1
+    assert robot.distance == 0.1
+
+
+def test_standard_mode_exposes_only_voice_goal_and_stop_tools():
     from google.genai import types
 
     config = connect_config("standard")
     types.LiveConnectConfig(**config)
     tools = config["tools"][0]["function_declarations"]
-    assert {tool["name"] for tool in tools} == {"start_navigation", "navigate", "say", "stop"}
+    assert {tool["name"] for tool in tools} == {"start_navigation", "stop"}
     assert all(tool["behavior"] == "BLOCKING" for tool in tools)
     assert {tool["name"] for tool in visual_declarations()} == {
         "observe",

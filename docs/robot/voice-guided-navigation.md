@@ -40,9 +40,10 @@ camera, speech, and text input and returns text and tool calls. Audio replies us
 speech program, described below.
 
 The default `--visual-planner standard` uses the streaming session for spoken instructions and
-cancellation, then delegates each navigation decision to the standard ER 2 endpoint. Each
+cancellation, then runs an autonomous visual loop with the standard ER 2 endpoint. Each
 decision receives the current image, guarded sensor context, actual recent actions, and remembered
-observations. The streaming session repeatedly requests the next step until the mission ends.
+observations. Once a goal is accepted, the loop keeps taking guarded steps while the speech
+session listens for cancellation; continuing does not require another spoken or model request.
 Use `--visual-planner streaming` to compare the original mode, where the streaming model chooses
 the physical actions itself. Both modes use the same movement guards and arrival reviewer.
 
@@ -132,8 +133,8 @@ duck's speaker; the microphone remains live so spoken cancellation can interrupt
 
 Every tool is blocking and runs one at a time. The movement layer exposes walking arcs because
 the current gait steers more effectively while walking than while attempting to pivot in place.
-In standard planning mode, the speech session uses `navigate(reason)` to request one visual
-decision and execute it through this same guarded layer.
+In standard planning mode, the visual loop owns physical actions; the speech session accepts
+goals and cancellation. Both use the same stop mechanism.
 
 | Model tool | Bridge operation |
 |---|---|
