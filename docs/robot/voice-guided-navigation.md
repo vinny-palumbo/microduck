@@ -7,8 +7,9 @@ live voice workflow. The [navigation bridge README](../../apps/navigation/README
 owns the sensor, gaze, and stop guards; [the simulator guide](simulation.md) owns simulator setup.
 
 This is work in progress. Live model runs have accepted a prerecorded spoken kitchen instruction
-and travelled up to 1.76 m without collisions or falls. A complete route into the kitchen has not
-yet been demonstrated; independent scoring rejected one false model arrival claim. These
+and travelled up to 1.93 m from the start without collisions or falls. The latest run reached
+the doorway, but full entry has not yet been demonstrated; independent scoring rejected
+premature model arrival claims. These
 recordings test speech input through the API, not a person speaking into a live microphone.
 Physical-robot navigation has not been validated.
 
@@ -167,8 +168,9 @@ remembered places support exploration without a supplied floor plan. Place memor
 the recording, but is not automatically loaded into a later run.
 
 Before accepting an arrival claim, the bridge stops and collects fresh forward and side views.
-A separate, stateless visual reviewer receives only those images and the destination. If it
-cannot identify the destination and establish that the duck is inside it, its visual evidence
+A separate, stateless visual reviewer receives only those images and the destination. It checks
+room identity and full-body entry separately, including near-floor transitions and doorjambs in
+side views. If it cannot establish that the duck has crossed the entrance, its visual evidence
 is returned to the navigator so exploration can continue. Three rejected claims end the mission
 as blocked. This second model assessment can still be wrong; simulator truth remains the
 independent arrival check.

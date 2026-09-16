@@ -80,6 +80,19 @@ Current integration evidence:
   or a dispatched walking action. Integration tests verify that both side views survive
   recentering, the current guard remains authoritative, and exact selected JPEG bytes are
   recorded with view IDs. Invalid or unsynchronized camera orientation discards cached scans.
+- Multi-view run `runs/20260916T230525Z-dbf9fd18` reached the kitchen doorway after 23 calls
+  and 160.7 seconds, with 1.929 m net displacement. Both visual models reported arrival,
+  but exact scoring of `voice-mission-008.truth.jsonl` rejected it: final trunk position
+  (-0.857, 1.781) remained outside the kitchen. All 1,607 truth samples had valid coverage,
+  no obstacle contacts or falls, and an acknowledged final stop. The side view still showed
+  the adjoining corridor floor and doorway threshold. Distinctive appliances establish room
+  identity, but do not establish that the whole robot has crossed the doorway.
+- Arrival review now separately assesses room identity and full-body entry, including every
+  side view's near-floor boundary and doorjamb geometry. Three new provider reviews of the exact
+  008 images rejected entry; the known interior fixture still passed and the 004 plain wall
+  remained rejected. The diagnostic saves prompt/image hashes and responses in
+  `runs/arrival-geometry-regression.json`. This five-case perception check does not replace
+  an independently scored navigation run.
 - The active-motion spoken-stop diagnostic in `runs/20260916T225938Z-323e2a10` failed:
   a valid synthesized “Stop” WAV began during an actual model-selected walking command,
   but no stop transcription arrived before the 120 s diagnostic deadline. The initial kitchen

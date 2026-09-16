@@ -186,6 +186,33 @@ async def test_http_request_has_header_key_timeout_and_no_redirects(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_visible_destination_with_uncertain_threshold_remains_rejected(monkeypatch):
+    # The independent reviewer must receive every side view, preserve their order,
+    # and return its geometry rejection unchanged even if the destination is visible.
+    ordered = [
+        {"label": label, "jpeg": f"actual-{label}-bytes".encode()}
+        for label in ("front", "left45", "right45", "front_final")
+    ]
+    assessment = report(
+        destination_visible=True,
+        inside_destination=False,
+        evidence="Appliances identify the kitchen; right45 places an entry jamb beside the camera.",
+        uncertainty="The robot may straddle the threshold; full body entry is not established.",
+    )
+    sent = install_http(monkeypatch, data=response(assessment))
+    result = await GeminiArrivalReviewer("secret").review("kitchen", ordered)
+    assert result == assessment
+    parts = sent["json"]["contents"][0]["parts"]
+    assert [json.loads(parts[index]["text"])["label"] for index in (1, 3, 5, 7)] == [
+        view["label"] for view in ordered
+    ]
+    assert [base64.b64decode(parts[index]["inlineData"]["data"]) for index in (2, 4, 6, 8)] == [
+        view["jpeg"] for view in ordered
+    ]
+    assert set(result) == {"destination_visible", "inside_destination", "evidence", "uncertainty"}
+
+
+@pytest.mark.asyncio
 async def test_http_error_does_not_read_provider_body(monkeypatch):
     sent = install_http(monkeypatch, status=403, data={"error": "secret provider body"})
     with pytest.raises(RuntimeError, match="^Gemini arrival review HTTP 403$"):
