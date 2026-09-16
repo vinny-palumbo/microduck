@@ -38,17 +38,37 @@ import numpy.typing as npt
 from aiortc import RTCDataChannel, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
 from aiortc.sdp import candidate_from_sdp
-
-# **Their DTLS shim, called out loud.** aiortc's default cipher list shares no cipher with the
-# GStreamer `webrtcsink` a duck runs, so DTLS never completes and the peer connection never
-# reaches `connected` — a failure that looks exactly like a NAT problem and is not one. Their
-# module applies it at import; calling it here means this file does not depend on somebody else's
-# import having happened first, and it is idempotent by design.
-from reachy_mini.media.central_consumer import _patch_aiortc_dtls_ciphers
-
 from control import CONTROL_LABEL, Rpc
 
 logger = logging.getLogger(__name__)
+
+
+def _patch_aiortc_dtls_ciphers() -> None:
+    """Allow the RSA certificate GStreamer's webrtcsink presents.
+
+    aiortc 1.14's defaults only include ECDSA authentication. This is the same compatibility
+    fix as Reachy Mini's central consumer (aiortc PR #1392), kept here so a LAN client does not
+    install the whole robot SDK and its native camera dependencies for this one function.
+    Remove when aiortc ships https://github.com/aiortc/aiortc/pull/1392.
+    """
+    from aiortc.rtcdtlstransport import RTCCertificate
+
+    if getattr(RTCCertificate, "_reachy_cipher_patched", False):
+        return
+    original = RTCCertificate._create_ssl_context
+
+    def compatible_context(self: Any, srtp_profiles: Any) -> Any:
+        context = original(self, srtp_profiles)
+        context.set_cipher_list(
+            b"ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305:"
+            b"ECDHE-ECDSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA:"
+            b"ECDHE-RSA-AES128-GCM-SHA256"
+        )
+        return context
+
+    RTCCertificate._create_ssl_context = compatible_context
+    RTCCertificate._reachy_cipher_patched = True
+
 
 _patch_aiortc_dtls_ciphers()
 
