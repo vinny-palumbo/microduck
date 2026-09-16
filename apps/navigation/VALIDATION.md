@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 247 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 315 Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -53,6 +53,13 @@ Current integration evidence:
   Exact scoring of `voice-mission-005.truth.jsonl` found 1.377 m net travel, complete coverage,
   no collisions or falls, and no arrival. The streaming navigator's visual interpretation
   remains the limiting issue; the independent review prevents a false success report.
+- On the same recorded doorway image, the standard ER 2 endpoint selected a rightward camera
+  inspection instead of claiming arrival. This single comparison motivated a separate
+  `--visual-planner standard` mode: streaming retains speech and cancellation, while each
+  visual action comes from a stateless standard-model request and the same guarded executor.
+  Tests cover goal retention, tool restrictions, cancellation during planning, arrival-review
+  feedback, and rejection of raw simulator truth. This does not itself establish a completed
+  navigation route.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

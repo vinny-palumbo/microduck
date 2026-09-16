@@ -39,6 +39,13 @@ The [robotics streaming endpoint](https://ai.google.dev/gemini-api/docs/robotics
 camera, speech, and text input and returns text and tool calls. Audio replies use a separate local
 speech program, described below.
 
+The default `--visual-planner standard` uses the streaming session for spoken instructions and
+cancellation, then delegates each navigation decision to the standard ER 2 endpoint. Each
+decision receives the current image, guarded sensor context, actual recent actions, and remembered
+observations. The streaming session repeatedly requests the next step until the mission ends.
+Use `--visual-planner streaming` to compare the original mode, where the streaming model chooses
+the physical actions itself. Both modes use the same movement guards and arrival reviewer.
+
 ## Start a navigation simulator
 
 In the first terminal, stop any previous simulator before changing its scene or initial pose.
@@ -125,6 +132,8 @@ duck's speaker; the microphone remains live so spoken cancellation can interrupt
 
 Every tool is blocking and runs one at a time. The movement layer exposes walking arcs because
 the current gait steers more effectively while walking than while attempting to pivot in place.
+In standard planning mode, the speech session uses `navigate(reason)` to request one visual
+decision and execute it through this same guarded layer.
 
 | Model tool | Bridge operation |
 |---|---|
@@ -185,6 +194,7 @@ Events include speech transcriptions, model tool requests, action results, measu
 failures. `mission.json` includes the goal, terminal status, stop acknowledgement, elapsed time,
 and remembered places. `goal_observed` is the model's assessment and always carries
 `goal_verified: false`.
+The recording also identifies the visual planning model so runs from the two modes can be compared.
 
 Exit 0 means that visual assessment; exit 2 means a blocked, cancelled, or failed mission; exit 1
 means setup failure; and Ctrl-C exits 130. Interpret stop acknowledgements using the
