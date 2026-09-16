@@ -7,9 +7,10 @@ live voice workflow. The [navigation bridge README](../../apps/navigation/README
 owns the sensor, gaze, and stop guards; [the simulator guide](simulation.md) owns simulator setup.
 
 This is work in progress. Live model runs have accepted a prerecorded spoken kitchen instruction
-and travelled up to 1.93 m from the start without collisions or falls. The latest run reached
+and travelled up to 1.93 m from the start without collisions or falls. The best clean run reached
 the doorway, but full entry has not yet been demonstrated; independent scoring rejected
-premature model arrival claims. These
+premature model arrival claims. Trial 011 explored the wrong room and contacted furniture
+outside the forward depth sensor's view, so it failed the collision criterion. These
 recordings test speech input through the API, not a person speaking into a live microphone.
 Physical-robot navigation has not been validated.
 
@@ -69,7 +70,7 @@ DUCK_SIM_CAMERAS=a \
 DUCK_SIM_VIEWER=0 \
 DUCK_SIM_START_X=0 \
 DUCK_SIM_START_Y=0 \
-DUCK_SIM_START_YAW_DEG=0 \
+DUCK_SIM_START_YAW_DEG=90 \
 DUCK_SIM_EVALUATION_LOG="$evaluation_dir/truth.jsonl" \
 scripts/duck-sim up
 scripts/duck-sim status
@@ -166,6 +167,11 @@ the legacy `duck-nav move_for` and `duck-nav turn_by` limits documented in the b
 Depth observations include left, center, and right sectors in the robot's trunk frame, plus the
 sensor's current yaw. Side scans report what the sensor sees while keeping forward movement
 disabled until the head is recentered. Missing obstacle returns do not certify clear space.
+Close obstacles observed in side scans remain latched after recentering. A fresh scan of the
+same area must positively establish clearance before body motion can resume; waiting alone
+does not clear the warning. Changed body pose or a full hazard store stops the mission for
+operator inspection. Restart only after clearance has been independently confirmed. This
+retains observed hazards but cannot detect obstacles that the sensor has never seen.
 
 Camera captures are limited to one per second. In standard mode, the local navigation loop
 requests each next decision after the previous action completes. In streaming mode, a heartbeat
@@ -180,6 +186,9 @@ side views. If it cannot establish that the duck has crossed the entrance, its v
 is returned to the navigator so exploration can continue. Three rejected claims end the mission
 as blocked. This second model assessment can still be wrong; simulator truth remains the
 independent arrival check.
+
+For kitchen goals, both visual stages require an identifiable oven, cooktop, sink with faucet,
+or refrigerator. Tables, boxes, cabinets, and floor colors alone cannot identify the destination.
 
 The model is instructed to enter the destination, not merely see it through a doorway. An
 acknowledged obstacle, gaze, or depth-quality stop permits bounded replanning: inspect the route,
@@ -240,8 +249,8 @@ cd ~/Pollen/microduck/apps/navigation
 uv run python scripts/validate_arrival.py
 ```
 
-This makes five provider requests against versioned doorway, interior, and wall images, verifies
-their checksums, and saves a JSON report under `runs/`. Expected verdicts and source provenance
+This makes eight provider requests against versioned doorway, interior, wall, and non-kitchen
+images, verifies their checksums, and saves a JSON report under `runs/`. Expected verdicts and source provenance
 stay in the local scorer; the model receives only the destination and camera images.
 
 To test cancellation during motion, start a fresh local simulator and run:

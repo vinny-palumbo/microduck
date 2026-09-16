@@ -107,6 +107,22 @@ class GuardConfig:
             raise ValueError("look hold must fit within a bounded two-second timeout")
 
 
+@dataclass
+class _SideHazard:
+    position: list[float]
+    yaw: float
+    tof_position: list[float]
+    tof_quat: list[float]
+    gravity: list[float]
+    depth_ns: float
+    received_at: float
+    neighborhood: set[int]
+    nearest_m: float
+    too_close: bool
+    merged_origin_shift_m: float = 0.0
+    merged_rotation_rad: float = 0.0
+
+
 class GuardedRobot:
     def __init__(self, transport: Any, config: GuardConfig | None = None):
         self.transport = transport
@@ -120,6 +136,10 @@ class GuardedRobot:
         self._stopping = 0
         self._cancel: asyncio.Event | None = None
         self._closed = False
+        # Local scan evidence only: no expiry, map, or inferred obstacle location.
+        self._side_hazards: list[_SideHazard] = []
+        self._side_hazard_overflow = False
+        self._rescan_association_rad = 0.0
 
     async def _request(self, method: str, params: dict, timeout: float | None = None) -> dict:
         return await asyncio.wait_for(
@@ -136,6 +156,13 @@ class GuardedRobot:
             if len(beams) != 64 or not 0.02 < _number(model["trunk_height_m"]) < 1:
                 raise ValueError("robot.model did not provide valid 8x8 depth geometry")
             self._beams = beams
+            adjacent_angles = [
+                math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(beam, beams[other])))))
+                for index, beam in enumerate(beams)
+                for other in (index + 1, index + 8)
+                if other < 64 and (other == index + 8 or index // 8 == other // 8)
+            ]
+            self._rescan_association_rad = min(math.radians(2.5), min(adjacent_angles) / 2)
             self.model = model
         await self._refresh_health()
         if self._health_task is None:
@@ -230,6 +257,185 @@ class GuardedRobot:
             return "invalid_telemetry"
         return None
 
+    @staticmethod
+    def _hazard_pose_matches(hazard: _SideHazard, position: list[float], yaw: float) -> bool:
+        delta = math.atan2(math.sin(yaw - hazard.yaw), math.cos(yaw - hazard.yaw))
+        return math.dist(position, hazard.position) <= 0.025 and abs(delta) <= math.radians(5)
+
+    @staticmethod
+    def _hazard_gaze_matches(hazard: _SideHazard, position: list[float], quat: list[float]) -> bool:
+        # Full orientation matters: looking above an obstacle cannot clear it.
+        dot = abs(sum(a * b for a, b in zip(quat, hazard.tof_quat)))
+        angle = 2 * math.acos(min(1.0, dot))
+        return math.dist(position, hazard.tof_position) <= 0.025 and angle <= math.radians(5)
+
+    @staticmethod
+    def _hazard_view_uncertainty(
+        hazard: _SideHazard,
+        position: list[float],
+        yaw: float,
+        pos: list[float],
+        quat: list[float],
+        gravity: list[float],
+    ) -> tuple[float, float]:
+        """Conservative association bounds, not an inferred obstacle location."""
+        yaw_delta = abs(math.atan2(math.sin(yaw - hazard.yaw), math.cos(yaw - hazard.yaw)))
+        tilt = math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(gravity, hazard.gravity)))))
+        dot = abs(sum(a * b for a, b in zip(quat, hazard.tof_quat)))
+        gaze_angle = 2 * math.acos(min(1.0, dot))
+        body_angle = yaw_delta + tilt
+        # Rotating the body also moves the sensor origin around the trunk.
+        lever_arm = max(math.hypot(*pos), math.hypot(*hazard.tof_position))
+        origin_shift = (
+            math.dist(position, hazard.position)
+            + math.dist(pos, hazard.tof_position)
+            + 2 * lever_arm * math.sin(min(math.pi, body_angle) / 2)
+        )
+        return origin_shift, body_angle + gaze_angle
+
+    def _hazard_clearance_matches(
+        self,
+        hazard: _SideHazard,
+        position: list[float],
+        yaw: float,
+        pos: list[float],
+        quat: list[float],
+        gravity: list[float],
+    ) -> bool:
+        shift, rotation = self._hazard_view_uncertainty(hazard, position, yaw, pos, quat, gravity)
+        shift += hazard.merged_origin_shift_m
+        rotation += hazard.merged_rotation_rad
+        # The old ray neighborhood is useful only while this association error
+        # stays below half a measured beam spacing. Tiny ranges tighten this
+        # gate automatically; centimetres of drift never imply free space.
+        return shift < hazard.nearest_m and (
+            math.asin(shift / hazard.nearest_m) + rotation <= self._rescan_association_rad
+        )
+
+    def _retain_side_hazards(
+        self,
+        snapshot: dict,
+        pos: list[float],
+        quat: list[float],
+        sensor_yaw: float,
+        close: dict[int, float],
+        ranged: set[int],
+        quality_ok: bool,
+    ) -> tuple[str | None, dict]:
+        """A fresh front view cannot erase close returns in a previous side view.
+
+        Matching uses the original anchors, never a rolling pose average. A
+        one-beam neighborhood accommodates the bounded orientation tolerance.
+        Unknown/no-return beams in that neighborhood cannot prove clearance.
+        """
+        odom = snapshot["state"]["data"]["odom"]
+        position, yaw = _vector(odom["position"], 3), _number(odom["yaw"])
+        gravity = _unit(snapshot["state"]["data"]["safety"]["gravity"], 3)
+        depth_ns = _number(snapshot["depth"]["data"]["t_ns"])
+        received_at = _number(snapshot["depth"]["received_at"])
+        self._side_hazards = [
+            hazard
+            for hazard in self._side_hazards
+            if not (
+                not close
+                and quality_ok
+                and depth_ns > hazard.depth_ns
+                and received_at > hazard.received_at
+                and self._hazard_pose_matches(hazard, position, yaw)
+                and self._hazard_gaze_matches(hazard, pos, quat)
+                and self._hazard_clearance_matches(hazard, position, yaw, pos, quat, gravity)
+                and hazard.neighborhood <= ranged
+            )
+        ]
+        if close and abs(sensor_yaw) > math.radians(20):
+            neighborhood = {
+                row * 8 + col
+                for index in close
+                for row in range(max(0, index // 8 - 1), min(8, index // 8 + 2))
+                for col in range(max(0, index % 8 - 1), min(8, index % 8 + 2))
+            }
+            matching = next(
+                (
+                    hazard
+                    for hazard in self._side_hazards
+                    if self._hazard_pose_matches(hazard, position, yaw)
+                    and self._hazard_gaze_matches(hazard, pos, quat)
+                ),
+                None,
+            )
+            if matching:
+                shift, rotation = self._hazard_view_uncertainty(
+                    matching, position, yaw, pos, quat, gravity
+                )
+                matching.merged_origin_shift_m = max(matching.merged_origin_shift_m, shift)
+                matching.merged_rotation_rad = max(matching.merged_rotation_rad, rotation)
+                matching.neighborhood.update(neighborhood)
+                matching.nearest_m = min(matching.nearest_m, min(close.values()))
+                matching.too_close |= min(close.values()) < 0.10
+                matching.depth_ns = max(matching.depth_ns, depth_ns)
+                matching.received_at = max(matching.received_at, received_at)
+            elif len(self._side_hazards) < 3:
+                self._side_hazards.append(
+                    _SideHazard(
+                        position,
+                        yaw,
+                        pos,
+                        quat,
+                        gravity,
+                        depth_ns,
+                        received_at,
+                        neighborhood,
+                        min(close.values()),
+                        min(close.values()) < 0.10,
+                    )
+                )
+            else:
+                self._side_hazard_overflow = True
+        records = []
+        for hazard in self._side_hazards:
+            axis = _rotate(hazard.tof_quat, [1.0, 0.0, 0.0])
+            records.append(
+                {
+                    "direction": "left" if axis[1] > 0 else "right",
+                    "sensor_yaw_deg": math.degrees(math.atan2(axis[1], axis[0])),
+                    "sensor_pitch_deg": math.degrees(math.atan2(axis[2], math.hypot(*axis[:2]))),
+                    "nearest_obstacle_m": hazard.nearest_m,
+                    "depth_t_ns": hazard.depth_ns,
+                    "body_pose": {"position": hazard.position.copy(), "yaw": hazard.yaw},
+                    "rescan_zones": sorted(hazard.neighborhood),
+                    "depth_too_close": hazard.too_close,
+                    "rescan_association_uncertain": not self._hazard_clearance_matches(
+                        hazard, position, yaw, pos, quat, gravity
+                    ),
+                }
+            )
+        reason = None
+        if self._side_hazard_overflow:
+            reason = "retained_hazard_capacity"
+        elif any(
+            not self._hazard_pose_matches(hazard, position, yaw) for hazard in self._side_hazards
+        ):
+            reason = "retained_hazard_pose_changed"
+        elif any(hazard.too_close for hazard in self._side_hazards):
+            reason = "depth_too_close"
+        elif self._side_hazards:
+            reason = "obstacle"
+        summary = {
+            "retained_side_hazards": records,
+            "retained_hazard_guard_reason": reason,
+            "retained_hazard_capacity_exceeded": self._side_hazard_overflow,
+        }
+        if reason:
+            summary["retained_hazard_guidance"] = (
+                "Body motion remains blocked. Rescan each recorded ToF yaw and pitch at its "
+                "original body pose; actual valid range returns must clear the recorded zones. "
+                "Recentring or waiting cannot clear an observed side hazard. "
+                "If rescan association remains uncertain, clearance requires operator intervention. "
+                "Changed body pose or capacity overflow requires operator intervention; "
+                "restart only after externally confirmed clearance."
+            )
+        return reason, summary
+
     def _depth_guard(self, snapshot: dict) -> tuple[str | None, dict]:
         """Match kinematics::tof floor projection using wire-provided geometry.
 
@@ -263,6 +469,8 @@ class GuardedRobot:
             if above_floor <= 0:
                 return "invalid_pose", details
             known, floors, hits, too_close, central_unknown = 0, 0, [], False, False
+            close: dict[int, float] = {}
+            ranged: set[int] = set()
             sectors = {
                 name: {"known_zones": 0, "floor_zones": 0, "nearest_obstacle_m": None}
                 for name in ("left", "center", "right")
@@ -285,6 +493,7 @@ class GuardedRobot:
                     central_unknown = True
                 if code not in (5, 9) or mm <= 0:
                     continue
+                ranged.add(index)
                 downward = sum(d * g for d, g in zip(direction, gravity))
                 r = mm / 1000.0
                 if downward > 0 and r * downward >= above_floor * 0.85:
@@ -292,6 +501,8 @@ class GuardedRobot:
                     sector["floor_zones"] += 1
                     continue
                 horizontal = r * math.sqrt(max(0.0, 1 - downward * downward))
+                if horizontal <= self.config.obstacle_distance_m:
+                    close[index] = horizontal
                 nearest = sector["nearest_obstacle_m"]
                 sector["nearest_obstacle_m"] = (
                     horizontal if nearest is None else min(nearest, horizontal)
@@ -309,12 +520,18 @@ class GuardedRobot:
                 "sector_frame": "trunk_left_center_right; null means no returned obstacle, not certified clearance",
                 "sensor_yaw_deg": math.degrees(sensor_yaw),
             }
+            retained_reason, retained = self._retain_side_hazards(
+                snapshot, pos, quat, sensor_yaw, close, ranged, known >= 48 and not central_unknown
+            )
+            details.update(retained)
+            if retained_reason and retained_reason != "obstacle":
+                return retained_reason, details
             # Side scans can inform planning, but never certify forward movement.
             if not head_forward:
                 return "head_not_forward", details
             if too_close:
                 return "depth_too_close", details
-            if hits and min(hits) <= self.config.obstacle_distance_m:
+            if retained_reason or (hits and min(hits) <= self.config.obstacle_distance_m):
                 return "obstacle", details
             if known < 48 or central_unknown:
                 return "depth_quality", details

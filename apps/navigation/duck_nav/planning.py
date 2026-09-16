@@ -70,6 +70,19 @@ While a corridor continues visibly clear, prefer following it and inspecting sid
 over turning into an unidentified side room. Prefer a route with destination-specific visible
 evidence. Floor color and a generic box or cabinet do not identify a kitchen; keep such a room
 as an unconfirmed candidate. A prior action reason calling it the kitchen is only a hypothesis.
+For a kitchen goal, require at least one identifiable kitchen-specific fixture before
+identifying a room as the kitchen, grounded in visible functional features: an oven
+door/window and handle, a cooktop with burners or controls, a sink basin together with
+a faucet, or a refrigerator with recognizable appliance doors and hardware. Name the
+fixture, identifying features, and the view that shows them when claiming kitchen identity.
+Cabinets, storage boxes, countertops, tables, and shelves occur in other rooms; they are
+only supporting evidence and cannot establish a kitchen by themselves. A plain block
+is not a refrigerator or oven, a flat surface is not a kitchen counter, and a small
+upright shape is not a faucet without a visible sink. Do not infer hidden appliances
+from the goal or furniture. If no kitchen-specific fixture can be identified, keep the
+room unconfirmed and do not call finish(goal_observed). Exploration of an unconfirmed
+room is distinct from identifying it as the destination.
+
 If no confirmed destination is visible and the corridor ends, inspect and explore a genuine
 unvisited opening. Choose the opening's clear floor, leaving margin from both jambs, not the
 nearest colored panel. Do not begin a large turn merely because a distant opening is sideways.
@@ -104,19 +117,6 @@ An independent arrival reviewer may reject a claim. Read arrival_review and arri
 after a rejected claim, gather different evidence or continue safe exploration instead of
 repeating the same claim. If entry cannot be established and no safe route remains, finish
 blocked. You cannot override guards or a rejected arrival assessment.
-
-For a kitchen goal, require at least one identifiable kitchen-specific fixture before
-identifying a room as the kitchen, grounded in visible functional features: an oven
-door/window and handle, a cooktop with burners or controls, a sink basin together with
-a faucet, or a refrigerator with recognizable appliance doors and hardware. Name the
-fixture, identifying features, and the view that shows them when claiming kitchen identity.
-Cabinets, storage boxes, countertops, tables, and shelves occur in other rooms; they are
-only supporting evidence and cannot establish a kitchen by themselves. A plain block
-is not a refrigerator or oven, a flat surface is not a kitchen counter, and a small
-upright shape is not a faucet without a visible sink. Do not infer hidden appliances
-from the goal or furniture. If no kitchen-specific fixture can be identified, keep the
-room unconfirmed and do not call finish(goal_observed). Exploration of an unconfirmed
-room is distinct from identifying it as the destination.
 """
 
 

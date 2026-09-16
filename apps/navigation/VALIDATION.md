@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 493 navigation Python tests (plus 9 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 508 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -177,6 +177,26 @@ Current integration evidence:
   rather than route reliability. Reports are stored as `step*-kitchen-fixtures-comparison.json`
   in the corresponding run directories. The tested text is now included in the planner;
   149 planner tests and Ruff passed. No map, route hint, or extra review stage was added.
+- The 011 contact occurred on step 45 after a right scan had measured furniture roughly
+  0.123 m away. Recentring produced a front minimum of 1.092 m and discarded that side hazard.
+  Offline geometry confirmed that the furniture was outside every forward ToF ray; the right
+  upper leg contacted it near the distance-stop transition. Available samples cannot separate
+  active motion from stopping coast at first contact. Lowering or raising the forward distance
+  threshold would not detect an object outside that sensor view. The run's ignored
+  `collision-diagnosis.json` and `.md` record intervals, geometry and reconstruction limits.
+- The guard now retains close side hazards across head movements. The exact recorded side
+  and front depth/state samples are versioned in `tests/fixtures/depth/side_hazard_011.json`.
+  Their regression test confirms that the front frame is clear by itself but remains blocked
+  after the preceding side scan. The fixture contains sensor data and robot odometry only;
+  simulator truth and scene geometry are not used by the guard. This reproduces the missed
+  hazard without repeating the collision, and does not establish general collision avoidance.
+- Side-hazard clearance requires newer valid range returns at a closely matched viewpoint;
+  association accounts for body motion, tilt, head rotation, sensor origin movement, and merged
+  observations. Ambiguous association stays blocked. More than three retained scan anchors or
+  body displacement beyond 2.5 cm/5° fails closed pending operator inspection. Regression tests
+  cover body-command refusal, continued head recovery, invalid/stale scans, upward gaze, pose
+  drift, tilt, sensor lever arms, capacity and valid rescans. All 508 tests plus 18 subtests and
+  Ruff passed. The final planner prompt also matches the tested comparison's SHA-256 exactly.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
