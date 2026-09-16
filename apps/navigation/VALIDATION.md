@@ -69,6 +69,24 @@ Current integration evidence:
   serial loop after goal acceptance. Regression tests cover a silent voice session, a pending
   goal response, repeated goal confirmation, spoken/tool cancellation during planning and body
   movement, and the final allowed action settling before budget exhaustion.
+- Autonomous run `runs/20260916T225107Z-fc9d519a` continued without further voice-model
+  requests and stopped blocked after 42 calls. Exact scoring of `voice-mission-007.truth.jsonl`
+  found 0.865 m net movement, complete coverage, no collisions or falls, and no arrival.
+  Turn directions matched their requests; visual descriptions alternated between left and right
+  after scans. The final obstacle refusal was followed by roughly 132 seconds of repeated
+  camera scans. This motivates retaining labelled views from the same body position.
+- The active-motion spoken-stop diagnostic in `runs/20260916T225938Z-323e2a10` failed:
+  a valid synthesized “Stop” WAV began during an actual model-selected walking command,
+  but no stop transcription arrived before the 120 s diagnostic deadline. The initial kitchen
+  instruction was transcribed correctly. Active voice cancellation is therefore not yet
+  validated; the earlier stationary-stop result does not establish interruption during motion.
+  `scripts/validate_voice_stop.py` records the audio trigger, read-only simulator motion,
+  transcription, terminal result, and final commands separately, with 22 offline regression tests.
+- An offline 24-trial pure-yaw screen used the unchanged policy and navigation scene at the
+  clear starting pose, commands of ±0.5/±0.8 rad/s for 1/2/3 seconds, and two repetitions.
+  Active yaw excursions of 3.6–9.1° returned to within 0.63° after settling; final translation
+  stayed below 0.48 mm, with no falls or obstacle contacts. This does not provide a usable pivot
+  primitive. Results remain in the RL checkout's `artifacts/navigation/pivot-screening.json`.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
