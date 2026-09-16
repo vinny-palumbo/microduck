@@ -337,7 +337,16 @@ pub const JSONRPC_VERSION: &str = "2.0";
 /// A new variant on a tagged enum is what a robotctl built before it cannot decode, which is the
 /// one reason this is a bump rather than a note: the tap is still `padd`'s own socket, and every
 /// other client is untouched.
-pub const API_VERSION: u32 = 28;
+///
+/// # v29 — gaze joint targets and policy-relative head commands
+///
+/// `robot.look` now converts its absolute IK solution into HOME-relative policy commands.
+/// [`LookResult::head`] remains resendable through `robot.head`; [`LookResult::joint_targets`]
+/// carries the absolute angles clients compare with measured joints. Previously the absolute
+/// solution was incorrectly fed to a policy trained on offsets, adding HOME a second time.
+/// Install the daemon release containing API 29 with gaze clients that verify these targets;
+/// there is no client-side compensation for older daemons. Version skew is reported, not refused.
+pub const API_VERSION: u32 = 29;
 
 /// The observation width every policy this robot family runs is built against.
 ///
@@ -2030,11 +2039,12 @@ pub struct MoveParams {
     pub vyaw: f64,
 }
 
-/// Head joint targets, radians. Continuous intent — see [`method::ROBOT_HEAD`].
+/// Head joint offsets from HOME, radians. Continuous intent — see [`method::ROBOT_HEAD`].
 ///
-/// Joint-space rather than a gaze direction. Both forms are wanted eventually and both will
-/// be exposed; this is the one the gamepad and calibration produce, and it is what the
-/// policy's observation actually carries, so it is the one that exists first.
+/// These are the joint-space commands produced by the gamepad and consumed by the policy's
+/// observation; [`LookParams`] supplies a point to aim at instead. Zero requests the nominal
+/// pose, whose neck_pitch and head_pitch are both +0.3491 rad; these are not absolute encoder
+/// angles.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HeadParams {
@@ -2044,11 +2054,12 @@ pub struct HeadParams {
     pub head_roll: f64,
 }
 
-/// A point to look at, trunk frame, metres — see [`method::ROBOT_LOOK`]. The gaze form
-/// [`HeadParams`]' doc promised: the daemon solves the IK against its own MJCF model, so a
-/// client never has to know which way a positive head_yaw turns.
+/// A point to look at, trunk frame, metres — see [`method::ROBOT_LOOK`]. The daemon solves
+/// the IK against its own MJCF model, so a client never has to know which way a positive
+/// head_yaw turns.
 ///
-/// `neck_pitch` is posture, not aim — the IK holds it and aims around it. Defaults to 0.
+/// `neck_pitch` is absolute joint posture, not an offset or aim — the IK holds it and aims
+/// around it. Defaults to 0.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LookParams {
@@ -2061,11 +2072,22 @@ pub struct LookParams {
     pub neck_pitch: f64,
 }
 
-/// Answer to [`Call::RobotLook`]: the joints the head was sent to.
+/// Absolute desired head angles, radians, in the same convention as measured joint positions.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct HeadJointTargets {
+    pub neck_pitch: f64,
+    pub head_pitch: f64,
+    pub head_yaw: f64,
+    pub head_roll: f64,
+}
+
+/// Answer to [`Call::RobotLook`]: the requested gaze, not a claim that it has settled.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LookResult {
-    /// What was handed to the same path `robot.head` feeds — resend these to hold the gaze.
+    /// HOME-relative offsets handed to the policy — resend these as `robot.head` to hold gaze.
     pub head: HeadParams,
+    /// Absolute IK solution. Compare measured head joints with these, not with `head` offsets.
+    pub joint_targets: HeadJointTargets,
     /// The point is beyond the head's reach (travel limits, or the gimbal geometry near
     /// ±90° yaw); the joints are the closest gaze, not a lock.
     pub clamped: bool,

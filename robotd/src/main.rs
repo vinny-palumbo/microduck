@@ -4138,16 +4138,19 @@ fn dispatch(
         }
 
         // Gaze as a point: the IK runs here, against the same MJCF the policies train on,
-        // and the answer is the joints the head was sent to — so a client can hold the gaze
-        // by resending them as `robot.head`, or notice `clamped` and move the robot instead.
+        // and the answer separates absolute joint targets from resendable `robot.head` offsets.
+        // The policy was trained on deltas from HOME; handing it absolute IK angles adds HOME
+        // a second time and points the camera below the requested target.
         // Never refused: an aim is an intent like `robot.head`, and the closest-possible
         // gaze at a clamped target is still the most useful thing the head can do.
         proto::Call::RobotLook(p) => {
             static HEAD_FK: std::sync::LazyLock<kinematics::head::HeadFk> =
                 std::sync::LazyLock::new(kinematics::head::HeadFk::alpha);
             let gaze = HEAD_FK.look_at([p.x, p.y, p.z], p.neck_pitch);
-            intents.set_head(gaze.joints);
-            let [neck_pitch, head_pitch, head_yaw, head_roll] = gaze.joints;
+            let home = mapping::head_joints_of(&DEFAULT_POSITION);
+            let offsets = std::array::from_fn(|i| gaze.joints[i] - home[i]);
+            intents.set_head(offsets);
+            let [neck_pitch, head_pitch, head_yaw, head_roll] = offsets;
             proto::Response::ok(
                 Some(id),
                 &proto::LookResult {
@@ -4156,6 +4159,12 @@ fn dispatch(
                         head_pitch,
                         head_yaw,
                         head_roll,
+                    },
+                    joint_targets: proto::HeadJointTargets {
+                        neck_pitch: gaze.joints[0],
+                        head_pitch: gaze.joints[1],
+                        head_yaw: gaze.joints[2],
+                        head_roll: gaze.joints[3],
                     },
                     clamped: gaze.clamped,
                 },
@@ -5575,12 +5584,11 @@ mod tests {
         assert_eq!(mode.mode, "walk");
     }
 
-    /// `robot.look` is a promise with two halves: the head actually moves (the intent is
-    /// set), and the answer names the joints it moves to — so a client can hold the gaze by
-    /// resending them as `robot.head`. A left-of-robot target must come back with a
-    /// left-turning yaw, or the IK's sign conventions broke between the crate and the wire.
+    /// The policy tracks offsets, while FK and encoder readings use absolute angles. A
+    /// dispatch-only test that equates the intent with the IK solution misses the HOME offset
+    /// added by the policy and lets an accepted gaze point below its target on the real body.
     #[test]
-    fn robot_look_moves_the_head_and_answers_with_the_joints() {
+    fn robot_look_converts_to_policy_offsets_and_reports_absolute_targets() {
         let intents = Intents::new();
         let state = RobotState::new(
             &Params::default(),
@@ -5604,7 +5612,10 @@ mod tests {
 
         assert!(!look.clamped, "an ahead-left point is well inside reach");
         assert!(look.head.head_yaw > 0.2, "left target, leftward yaw");
-        assert!((look.head.neck_pitch - 0.1).abs() < 1e-9, "posture is held");
+        assert!(
+            (look.joint_targets.neck_pitch - 0.1).abs() < 1e-9,
+            "absolute posture is held"
+        );
 
         let sent = intents.snapshot().command.head;
         assert_eq!(
@@ -5616,6 +5627,47 @@ mod tests {
                 look.head.head_roll
             ],
             "the answer must be exactly what the head was sent"
+        );
+
+        let absolute = [
+            look.joint_targets.neck_pitch,
+            look.joint_targets.head_pitch,
+            look.joint_targets.head_yaw,
+            look.joint_targets.head_roll,
+        ];
+        let home = mapping::head_joints_of(&DEFAULT_POSITION);
+        assert_eq!(home, [0.3491, 0.3491, 0.0, 0.0]);
+        let policy_target = std::array::from_fn(|i| sent[i] + home[i]);
+        for (actual, expected) in policy_target.iter().zip(absolute) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+
+        // Check the reconstructed policy target in camera coordinates, not just another
+        // invocation of the IK: a double HOME offset must fail a physical pointing assertion.
+        let camera = kinematics::head::HeadFk::alpha().camera_in_trunk_cv2(policy_target);
+        let target_in_camera = camera.quat.conjugate().rotate([
+            0.5 - camera.pos[0],
+            0.5 - camera.pos[1],
+            -camera.pos[2],
+        ]);
+        assert!(
+            target_in_camera[2] > 0.0,
+            "target is in front of the camera"
+        );
+        assert!(target_in_camera[0].abs() < 1e-4);
+        assert!(target_in_camera[1].abs() < 1e-4);
+
+        intents.set_head([0.0; 4]);
+        dispatch(
+            &state,
+            &intents,
+            proto::Id::Number(2),
+            &proto::Call::RobotHead(look.head),
+        );
+        assert_eq!(
+            intents.snapshot().command.head,
+            sent,
+            "resending the returned head command must not add or subtract HOME again"
         );
     }
 
