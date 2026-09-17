@@ -54,6 +54,15 @@ session listens for cancellation; continuing does not require another spoken or 
 Use `--visual-planner streaming` to compare the original mode, where the streaming model chooses
 the physical actions itself. Both modes use the same movement guards and arrival reviewer.
 
+For an experimental comparison of the standard planner, add
+`--visual-model gemini-3.8-flash`. This uses medium reasoning and an 8,192-token response
+budget; voice and arrival review still use Robotics ER 2. The default visual model remains
+`gemini-robotics-er-2-preview`. Recorded comparisons have not established a navigation advantage
+for Flash. Slower decisions can exhaust the 30-second image lifetime and cause a target to be
+refused; the option does not extend that lifetime. See Google's
+[Flash model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash)
+for its supported inputs and reasoning levels.
+
 ## Start a navigation simulator
 
 In the first terminal, stop any previous simulator before changing its scene or initial pose.

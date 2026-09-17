@@ -11,6 +11,9 @@ import math
 import aiohttp
 from PIL import Image, UnidentifiedImageError
 
+VISUAL_MODELS = ("gemini-robotics-er-2-preview", "gemini-3.8-flash")
+DEFAULT_VISUAL_MODEL = VISUAL_MODELS[0]
+
 ALLOWED_TOOLS = frozenset(
     {"observe", "look_at", "advance", "advance_to_floor", "remember_place", "finish"}
 )
@@ -114,7 +117,13 @@ forward translation before its turn, including the actual course error; it is no
 If the near threshold and both jamb margins are not established by the available views,
 inspect them before committing to entry. Reassess that near-floor passage after each arc.
 
-For steering toward visible floor, prefer advance_to_floor over estimating an angle.
+Along a clearly open corridor, use advance with heading_deg=0 to hold the established
+travel course, using 0.20 m only when the full segment is visibly clear. Do not repeatedly
+replace that course with the center of the camera image: the optical axis can differ from
+the corridor direction. After inspecting a side room without destination-specific fixtures,
+continue the clear corridor rather than repeatedly inspecting or entering that same candidate.
+Use advance_to_floor when an actual change of route or doorway alignment is needed,
+instead of estimating its angle. Inspect and identify the route before selecting its floor.
 Select point=[y,x], normalized 0–1000, in one exact supplied image identified by view_id.
 For a doorway, provide point and opposite_point at the TWO visible near-jamb floor
 contacts in that same image. The bridge projects each endpoint into metres and aims
@@ -206,14 +215,24 @@ def _image_part(jpeg):
 
 
 class GeminiVisualPlanner:
-    model = "gemini-robotics-er-2-preview"
+    model = DEFAULT_VISUAL_MODEL
 
-    def __init__(self, key, declarations):
+    def __init__(self, key, declarations, *, model=DEFAULT_VISUAL_MODEL):
         if not isinstance(key, str) or not key.strip():
             raise ValueError("a Gemini API key is required for visual planning")
+        if not isinstance(model, str) or model not in VISUAL_MODELS:
+            raise ValueError("unsupported visual planning model")
         if not isinstance(declarations, list):
             raise TypeError("visual planner declarations must be a list")
         self.key = key
+        self.model = model
+        self.generation_config = {"candidateCount": 1, "maxOutputTokens": 2048}
+        if model == "gemini-3.8-flash":
+            self.generation_config = {
+                "candidateCount": 1,
+                "maxOutputTokens": 8192,
+                "thinkingConfig": {"thinkingLevel": "MEDIUM"},
+            }
         self.declarations = []
         self.schemas = {}
         for declaration in declarations:
@@ -310,7 +329,7 @@ class GeminiVisualPlanner:
                     "allowedFunctionNames": list(self.schemas),
                 }
             },
-            "generationConfig": {"candidateCount": 1, "maxOutputTokens": 2048},
+            "generationConfig": copy.deepcopy(self.generation_config),
         }
 
     def parse(self, response):

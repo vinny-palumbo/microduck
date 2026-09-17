@@ -1781,6 +1781,38 @@ def test_standard_mode_exposes_only_voice_goal_and_stop_tools():
     }
     assert parser().parse_args([]).visual_planner == "standard"
     assert parser().parse_args(["--visual-planner", "streaming"]).visual_planner == "streaming"
+    assert parser().parse_args([]).visual_model == "gemini-robotics-er-2-preview"
+    assert (
+        parser().parse_args(["--visual-model", "gemini-3.8-flash"]).visual_model
+        == "gemini-3.8-flash"
+    )
+
+
+async def test_streaming_rejects_unapplied_visual_model_before_connecting():
+    from duck_nav.live import run as run_cli
+
+    args = parser().parse_args(
+        ["--visual-planner", "streaming", "--visual-model", "gemini-3.8-flash"]
+    )
+    with pytest.raises(ValueError, match="applies only"):
+        await run_cli(args)
+
+
+async def test_run_records_actual_visual_generation_config(tmp_path, fast_images):
+    planner = VisualPlanner(
+        [{"name": "finish", "args": {"status": "blocked", "reason": "Fixture ends"}}]
+    )
+    planner.generation_config = {
+        "thinkingConfig": {"thinkingLevel": "MEDIUM"},
+        "maxOutputTokens": 8192,
+    }
+    result, _, recorder = await run(tmp_path, Session(), goal="Kitchen", navigation_planner=planner)
+    assert result["navigation_generation_config"] == planner.generation_config
+    events = [
+        json.loads(line) for line in (recorder.path / "events.jsonl").read_text().splitlines()
+    ]
+    started = next(event for event in events if event["event"] == "live_session_started")
+    assert started["navigation_generation_config"] == planner.generation_config
 
 
 def test_live_schema_and_extended_house_budget():

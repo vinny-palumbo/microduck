@@ -11,7 +11,12 @@ import pytest
 from PIL import Image
 
 from duck_nav.live import declarations
-from duck_nav.planning import ALLOWED_TOOLS, GeminiVisualPlanner
+from duck_nav.planning import (
+    ALLOWED_TOOLS,
+    DEFAULT_VISUAL_MODEL,
+    VISUAL_MODELS,
+    GeminiVisualPlanner,
+)
 
 
 def planner():
@@ -110,6 +115,63 @@ def install_http(monkeypatch, *, status=200, error=None, json_error=None):
 
     monkeypatch.setattr("duck_nav.planning.aiohttp.ClientSession", Session)
     return sent
+
+
+def test_visual_model_default_contract():
+    assert VISUAL_MODELS == ("gemini-robotics-er-2-preview", "gemini-3.8-flash")
+    assert DEFAULT_VISUAL_MODEL == "gemini-robotics-er-2-preview"
+    model = planner()
+    assert model.model == DEFAULT_VISUAL_MODEL
+    assert model.generation_config == {"candidateCount": 1, "maxOutputTokens": 2048}
+    assert model.payload(context(), JPEG)["generationConfig"] == model.generation_config
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        True,
+        1,
+        [],
+        {},
+        "",
+        "gemini-robotics-er-2-preview ",
+        "GEMINI-3.8-FLASH",
+        "gemini-3.8-flash-preview",
+        "../gemini-3.8-flash",
+        "gemini-3.8-flash:generateContent?key=secret",
+        "https://untrusted.example/secret",
+        "gemini-3.8-flash%2Fsecret",
+    ],
+)
+def test_invalid_visual_model_fails_before_network(monkeypatch, bad):
+    sent = install_http(monkeypatch)
+    with pytest.raises(ValueError, match="^unsupported visual planning model$"):
+        GeminiVisualPlanner("secret", declarations(), model=bad)
+    assert sent == {}
+
+
+def test_visual_model_option_is_keyword_only():
+    with pytest.raises(TypeError):
+        GeminiVisualPlanner("secret", declarations(), "gemini-3.8-flash")
+
+
+@pytest.mark.parametrize("name", VISUAL_MODELS)
+def test_generation_config_is_isolated_per_payload_and_instance(name):
+    model = GeminiVisualPlanner("secret", declarations(), model=name)
+    other = GeminiVisualPlanner("secret", declarations(), model=name)
+    saved = copy.deepcopy(model.generation_config)
+    first = model.payload(context(), JPEG)
+    first["generationConfig"]["maxOutputTokens"] = 1
+    if name == "gemini-3.8-flash":
+        first["generationConfig"]["thinkingConfig"]["thinkingLevel"] = "HIGH"
+    assert model.generation_config == saved
+    assert model.payload(context(), JPEG)["generationConfig"] == saved
+    model.generation_config["maxOutputTokens"] = 2
+    if name == "gemini-3.8-flash":
+        model.generation_config["thinkingConfig"]["thinkingLevel"] = "LOW"
+    assert other.generation_config == saved
+    assert other.payload(context(), JPEG)["generationConfig"] == saved
 
 
 def test_live_declarations_convert_to_filtered_http_tools():
@@ -455,6 +517,41 @@ async def test_http_contract(monkeypatch):
     assert sent["headers"] == {"x-goog-api-key": "secret"}
     assert sent["timeout"] == 30
     assert sent["allow_redirects"] is False
+    assert sent["json"]["generationConfig"] == {"candidateCount": 1, "maxOutputTokens": 2048}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name,expected_config",
+    [
+        ("gemini-robotics-er-2-preview", {"candidateCount": 1, "maxOutputTokens": 2048}),
+        (
+            "gemini-3.8-flash",
+            {
+                "candidateCount": 1,
+                "maxOutputTokens": 8192,
+                "thinkingConfig": {"thinkingLevel": "MEDIUM"},
+            },
+        ),
+    ],
+)
+async def test_selected_visual_model_http_contract(monkeypatch, name, expected_config):
+    sent = install_http(monkeypatch)
+    model = GeminiVisualPlanner("secret", declarations(), model=name)
+    assert model.model == name
+    assert model.generation_config == expected_config
+    assert (await model.decide(context(), JPEG))["name"] == "advance"
+    assert sent["url"] == (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent"
+    )
+    assert sent["json"]["generationConfig"] == expected_config
+    assert sent["headers"] == {"x-goog-api-key": "secret"}
+    assert sent["timeout"] == 30
+    assert sent["allow_redirects"] is False
+    default_payload = planner().payload(context(), JPEG)
+    assert {key: value for key, value in sent["json"].items() if key != "generationConfig"} == {
+        key: value for key, value in default_payload.items() if key != "generationConfig"
+    }
 
 
 @pytest.mark.asyncio

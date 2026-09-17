@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 692 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 713 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -279,6 +279,19 @@ Current integration evidence:
   Exact scoring of `voice-mission-015.truth.jsonl` found 0.980 m net displacement, valid coverage
   across 2,009 samples, zero obstacle contacts or falls, and no kitchen arrival. The point tool
   executed correctly in this trial but did not solve room selection or overall navigation.
+- Six read-only provider replays used exact recorded 015 inputs at steps 18 and 19, with no
+  route hint or simulator data. ER 2 default selected corridor travel and a right-side scan;
+  Flash 3.8 HIGH remembered both rooms as unconfirmed; MEDIUM approached the left opening then
+  chose the right opening for inspection. Every response passed validation. ER 2 took 4.5–9.0 s,
+  HIGH 27.1–29.3 s, and MEDIUM 19.5–21.0 s. One sample per model/input does not establish
+  superiority, and the slower calls leave little image lifetime. The exact payload hashes,
+  configurations and outcomes are saved in that run's
+  `visual-model-comparison/comparison-six-calls.json`. An explicit `--visual-model` option
+  supports repeatable comparisons; the default remains ER 2 and image/guard limits stay fixed.
+  Planner guidance now reserves pixel targeting for route changes and doorway alignment;
+  clearly open corridor travel retains the existing course through zero-heading advances.
+  This addresses 015's repeated retargeting and side-room inspections as a hypothesis for
+  the next full trial. All 713 tests plus 18 subtests and Ruff passed after integration.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

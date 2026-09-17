@@ -518,6 +518,9 @@ class LiveMission:
             if navigation_planner is not None
             else "streaming"
         )
+        self.navigation_generation_config = copy.deepcopy(
+            getattr(navigation_planner, "generation_config", None)
+        )
         self.result = {"status": "error", "reason": "Session ended", "goal_verified": False}
 
     def record(self, event, **data):
@@ -1327,6 +1330,7 @@ class LiveMission:
             "live_session_started",
             model=DEFAULT_MODEL,
             navigation_model=self.navigation_model,
+            navigation_generation_config=self.navigation_generation_config,
             goal=self.goal,
             limits=vars(self.config),
         )
@@ -1385,6 +1389,7 @@ class LiveMission:
                 elapsed_s=time.monotonic() - self.started,
                 model=DEFAULT_MODEL,
                 navigation_model=self.navigation_model,
+                navigation_generation_config=self.navigation_generation_config,
                 remembered_places=self.places,
             )
             if not stopped.get("completed"):
@@ -1454,7 +1459,10 @@ async def run(args):
     from google import genai
 
     from .arrival import GeminiArrivalReviewer
-    from .planning import GeminiVisualPlanner
+    from .planning import DEFAULT_VISUAL_MODEL, GeminiVisualPlanner
+
+    if args.visual_planner == "streaming" and args.visual_model != DEFAULT_VISUAL_MODEL:
+        raise ValueError("--visual-model applies only to --visual-planner standard")
 
     config = LiveConfig(
         max_actions=args.max_actions,
@@ -1484,7 +1492,7 @@ async def run(args):
         else:
             audio = None
         navigation_planner = (
-            GeminiVisualPlanner(key, visual_declarations())
+            GeminiVisualPlanner(key, visual_declarations(), model=args.visual_model)
             if args.visual_planner == "standard"
             else None
         )
@@ -1516,6 +1524,8 @@ async def run(args):
 
 
 def parser():
+    from .planning import DEFAULT_VISUAL_MODEL, VISUAL_MODELS
+
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--host", default="127.0.0.1")
     result.add_argument("--port", type=int, default=8443)
@@ -1531,6 +1541,12 @@ def parser():
         choices=("standard", "streaming"),
         default="standard",
         help="Visual action selection; speech stays in the persistent streaming session",
+    )
+    result.add_argument(
+        "--visual-model",
+        choices=VISUAL_MODELS,
+        default=DEFAULT_VISUAL_MODEL,
+        help="Standard visual planner model; Flash uses medium reasoning for comparison",
     )
     result.add_argument("--runs-dir", default="runs")
     result.add_argument("--max-actions", type=int, default=600)
