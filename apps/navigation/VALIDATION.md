@@ -272,6 +272,13 @@ Current integration evidence:
   distinct from capture synchronization. Exact planning context is now recorded with its JPEGs
   so subsequent decision replays need not reconstruct it from an earlier observation.
   All 692 Python tests plus 18 subtests, Ruff check and formatting passed before the live trial.
+- Trial `runs/20260917T005335Z-be3b060b` exercised floor targeting through the real API and
+  daemons. The first five audited targets referenced the correct current JPEGs and visible
+  floor; all completed 0.090–0.103 m with acknowledged settled stops. Later the planner chose
+  an unconfirmed side room and approached its jamb, ending blocked after 26 calls and 200.8 s.
+  Exact scoring of `voice-mission-015.truth.jsonl` found 0.980 m net displacement, valid coverage
+  across 2,009 samples, zero obstacle contacts or falls, and no kitchen arrival. The point tool
+  executed correctly in this trial but did not solve room selection or overall navigation.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
