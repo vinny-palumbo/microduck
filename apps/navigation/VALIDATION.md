@@ -226,6 +226,12 @@ Current integration evidence:
   simulator-only calibration, with independent truth kept out of the executor. It stops the
   sequence on an action, guard, settling, stop, or scoring failure and retains the single-arc
   output fields. All 540 Python tests plus 18 subtests and Ruff passed after integration.
+- Voice run `runs/20260917T000748Z-50e6f8a8` recognized the kitchen oven, remembered its
+  doorway and approached it, then stopped after three guarded refusals near the left door frame.
+  It ended after 25 calls and 164.5 s. Exact scoring of `voice-mission-013.truth.jsonl` found
+  1.599 m net displacement, complete coverage across 1,646 samples, zero obstacle contacts
+  or falls, and no arrival. Holding the requested heading does not by itself solve doorway
+  approach planning; this run remains an unsuccessful navigation trial.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
