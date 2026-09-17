@@ -21,6 +21,9 @@ WALL_HALF_THICKNESS = 0.03
 INSIDE_DISTANCE = 0.35
 MAX_PROGRESS_STEP = 0.30
 LOOKAHEAD = 0.20
+ALIGNMENT_CHECK_DISTANCE = 0.20
+ALIGNMENT_REFERENCE_RESERVE = 0.12
+ALIGNMENT_CORRECTION_STEP = 0.08
 MAX_CROSS_TRACK = 0.10
 MAX_TANGENT_ERROR = math.radians(60)
 COMPLETE_DISTANCE = 0.06
@@ -254,6 +257,9 @@ def build_gap_path(start_xy, yaw, endpoints):
                             "max_cross_track_m": MAX_CROSS_TRACK,
                             "max_progress_step_m": MAX_PROGRESS_STEP,
                             "lookahead_m": LOOKAHEAD,
+                            "alignment_check_distance_m": ALIGNMENT_CHECK_DISTANCE,
+                            "alignment_reference_reserve_m": ALIGNMENT_REFERENCE_RESERVE,
+                            "alignment_correction_step_m": ALIGNMENT_CORRECTION_STEP,
                         },
                         "source": "observed_gap_reference_geometry_not_gait_or_free_space_certification",
                     }
@@ -365,17 +371,20 @@ def path_step(plan, current_xy, yaw, progress_s):
             "progress_s": progress,
             "cross_track_m": cross_track,
             "reference_heading_error_deg": math.degrees(heading_error),
+            "alignment_correction_pending": False,
         }
         if cross_track > MAX_CROSS_TRACK + EPS:
             return {**result, "reason": "cross_track_limit"}
         if abs(heading_error) > MAX_TANGENT_ERROR + EPS:
             return {**result, "reason": "reference_heading_limit"}
         lateral, outside = _local(current, center, tangent, normal)
-        if _wall_distance([lateral, outside], [lateral, outside], width) + EPS < CURRENT_CLEARANCE:
+        wall_clearance = _wall_distance([lateral, outside], [lateral, outside], width)
+        result["current_wall_clearance_m"] = wall_clearance
+        if wall_clearance + EPS < CURRENT_CLEARANCE:
             return {**result, "reason": "current_gap_clearance"}
         if outside < -WALL_HALF_THICKNESS and progress + COMPLETE_DISTANCE < stage_s:
             return {**result, "reason": "crossed_before_staging"}
-        if progress >= stage_s - EPS or abs(outside) <= 0.20 + EPS:
+        if progress >= stage_s - EPS or abs(outside) <= ALIGNMENT_CHECK_DISTANCE + EPS:
             direction = [math.cos(yaw), math.sin(yaw)]
             inward = -_dot(direction, normal)
             if inward <= 1e-6:
@@ -384,7 +393,21 @@ def path_step(plan, current_xy, yaw, progress_s):
             clearance = (width / 2 - abs(crossing)) * inward
             result["crossing_clearance_m"] = clearance
             if clearance + EPS < CURRENT_CLEARANCE:
-                return {**result, "reason": "crossing_alignment_clearance"}
+                if (
+                    outside > ALIGNMENT_CHECK_DISTANCE + EPS
+                    and wall_clearance + EPS >= CURRENT_CLEARANCE + ALIGNMENT_REFERENCE_RESERVE
+                ):
+                    # A held-heading line extrapolated to the plane need not
+                    # describe the next corrective step. Distance to the full
+                    # inferred walls is 1-Lipschitz, so every point in this
+                    # 0.12 m reference displacement disk retains 0.35 m clearance.
+                    # Request only 0.08 m, leaving 0.04 m reference reserve for
+                    # tracking/settling. This is geometry, not a guaranteed gait
+                    # bound; fresh local guards and measured stops remain required.
+                    result["alignment_correction_pending"] = True
+                    result["reference_reserve_m"] = ALIGNMENT_REFERENCE_RESERVE
+                else:
+                    return {**result, "reason": "crossing_alignment_clearance"}
         final = samples[-1]
         final_heading_error = abs(_wrap(yaw - final["yaw"]))
         if (
@@ -402,7 +425,8 @@ def path_step(plan, current_xy, yaw, progress_s):
         target = _at(samples, min(total, progress + LOOKAHEAD))["position"]
         delta = _subtract(target, current)
         bearing = _wrap(math.atan2(delta[1], delta[0]) - yaw)
-        distance = min(0.1, math.hypot(*delta), total - progress)
+        max_distance = ALIGNMENT_CORRECTION_STEP if result["alignment_correction_pending"] else 0.1
+        distance = min(max_distance, math.hypot(*delta), total - progress)
         if distance < 0.05 - EPS:
             return {**result, "reason": "remaining_distance_below_action_minimum"}
         if abs(bearing) > math.pi / 2:

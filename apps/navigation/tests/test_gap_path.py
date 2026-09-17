@@ -90,6 +90,20 @@ def close_parallel_plan():
     return build_gap_path([-0.5, -1.5], math.pi / 2, [[0, -0.4], [0, 0.4]])
 
 
+def measured_alignment_plan(reverse=False):
+    # Trial019 view51 projections and measured starting odometry only. The
+    # stopped follow-up pose below is also sensor odometry, never scene truth.
+    endpoints = [
+        [-0.9272807383481252, 1.570672249034742],
+        [-1.0506005977082493, 2.365105803654668],
+    ]
+    return build_gap_path(
+        [0.013209368224367857, 0.8552052576278788],
+        1.5405155359100589,
+        list(reversed(endpoints)) if reverse else endpoints,
+    )
+
+
 def test_reference_has_exact_staging_and_final_pose_with_bounded_sampling():
     plan = turning_plan()
     center, normal = plan["gap_center"], plan["gap_normal"]
@@ -225,11 +239,11 @@ def test_cross_track_and_heading_limits_refuse_motion():
 
 def test_near_plane_requires_current_heading_clearance_not_just_path_clearance():
     plan = straight_plan()
-    step = path_step(plan, [0, -0.3], math.pi / 2 + math.radians(20), 1.2)
+    step = path_step(plan, [0, -0.2], math.pi / 2 + math.radians(20), 1.3)
     assert step["status"] == "refused"
     assert step["reason"] == "crossing_alignment_clearance"
     assert step["crossing_clearance_m"] < 0.35
-    assert path_step(plan, [0, -0.3], math.pi / 2, 1.2)["status"] == "advance"
+    assert path_step(plan, [0, -0.2], math.pi / 2, 1.3)["status"] == "advance"
 
 
 @pytest.mark.parametrize("lateral,expected", [(0.03, "advance"), (-0.03, "refused")])
@@ -248,10 +262,97 @@ def test_reversed_endpoints_cannot_allow_a_heading_that_cuts_toward_a_jamb():
     endpoints = [[1, -0.4], [1, 0.4]]
     for points in [endpoints, list(reversed(endpoints))]:
         plan = build_gap_path([0, 0], 0, points)
-        step = path_step(plan, [0.6, 0.03], 0.1, 0.5)
+        step = path_step(plan, [0.8, 0.03], 0.1, 0.7)
         assert step["status"] == "refused"
         assert step["reason"] == "crossing_alignment_clearance"
-        assert step["crossing_clearance_m"] == pytest.approx(0.328218174494)
+        assert step["crossing_clearance_m"] == pytest.approx(0.348184857824)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_recorded_early_misalignment_allows_only_a_short_reserved_correction(reverse):
+    plan = measured_alignment_plan(reverse)
+    current = [-0.6060918463555763, 2.0526823888622]
+    yaw = -3.118757295777591
+    step = path_step(plan, current, yaw, 1.3814619074812395)
+    assert step["status"] == "advance"
+    assert step["alignment_correction_pending"] is True
+    assert step["distance_m"] == 0.08
+    assert step["heading_deg"] == pytest.approx(14.658181898284173)
+    assert step["cross_track_m"] == pytest.approx(0.0250635966493395)
+    assert step["reference_heading_error_deg"] == pytest.approx(-7.515227447824794)
+    assert step["crossing_clearance_m"] == pytest.approx(0.322491595420445)
+    assert step["current_wall_clearance_m"] == pytest.approx(0.5221273250037678)
+    assert step["reference_reserve_m"] == 0.12
+    assert plan["limits"]["reference_clearance_m"] == 0.37
+    assert plan["limits"]["alignment_correction_step_m"] == 0.08
+
+
+def test_full_displacement_disk_has_clearance_without_assuming_a_corrective_gait_arc():
+    plan = measured_alignment_plan()
+    current = [-0.6060918463555763, 2.0526823888622]
+    center, tangent, normal = [plan[key] for key in ("gap_center", "gap_tangent", "gap_normal")]
+    delta = [current[i] - center[i] for i in range(2)]
+    local = [sum(delta[i] * axis[i] for i in range(2)) for axis in (tangent, normal)]
+    current_clearance = _wall_distance(local, local, plan["gap_width_m"])
+    # Distance to a closed obstacle set changes by at most the displacement.
+    # These samples check that bound against the full inferred wall strips,
+    # not only two endpoint distances or a hypothesized gait trajectory.
+    lower_bound = current_clearance - 0.12
+    assert lower_bound == pytest.approx(0.4021273250037678)
+    assert lower_bound > 0.35
+    for radius in (0.0, 0.04, 0.08, 0.12):
+        for degrees in range(360):
+            angle = math.radians(degrees)
+            candidate = [local[0] + radius * math.cos(angle), local[1] + radius * math.sin(angle)]
+            clearance = _wall_distance(candidate, candidate, plan["gap_width_m"])
+            assert clearance >= lower_bound - 1e-9
+
+
+@pytest.mark.parametrize("reserve_delta,expected", [(-1e-6, "refused"), (0, "advance")])
+def test_early_alignment_deferral_requires_the_entire_reference_reserve(reserve_delta, expected):
+    plan = straight_plan()
+    desired_clearance = 0.35 + 0.12 + reserve_delta
+    outside = 0.03 + math.sqrt(desired_clearance**2 - 0.4**2)
+    step = path_step(plan, [0, -outside], math.pi / 2 + math.radians(30), 1.5 - outside)
+    assert outside > 0.20
+    assert step["current_wall_clearance_m"] == pytest.approx(desired_clearance)
+    assert step["crossing_clearance_m"] < 0.35
+    assert step["status"] == expected
+    if expected == "advance":
+        assert step["alignment_correction_pending"] is True
+        assert step["distance_m"] == 0.08
+    else:
+        assert step["reason"] == "crossing_alignment_clearance"
+        assert step["alignment_correction_pending"] is False
+
+
+@pytest.mark.parametrize("outside", [0.2, 0.1, -0.2])
+def test_close_or_inside_alignment_is_not_deferred_even_with_large_current_clearance(outside):
+    plan = straight_plan(1.2)
+    step = path_step(plan, [0, -outside], math.pi / 2 + math.radians(60), 1.5 - outside)
+    assert step["current_wall_clearance_m"] > 0.35 + 0.12
+    assert step["status"] == "refused"
+    assert step["reason"] == "crossing_alignment_clearance"
+    assert step["alignment_correction_pending"] is False
+    assert step["distance_m"] == 0
+
+
+def test_lateral_tracking_error_cannot_bypass_current_wall_clearance_for_correction():
+    plan = straight_plan()
+    step = path_step(plan, [-0.08, -0.1], math.pi / 2 + math.radians(15), 1.4)
+    assert step["cross_track_m"] < 0.10
+    assert step["current_wall_clearance_m"] < 0.35
+    assert step["status"] == "refused"
+    assert step["reason"] == "current_gap_clearance"
+    assert step["alignment_correction_pending"] is False
+
+
+def test_aligned_crossing_keeps_normal_step_budget_and_clearance_checks():
+    step = path_step(straight_plan(), [0, -0.39], math.pi / 2, 1.11)
+    assert step["status"] == "advance"
+    assert step["alignment_correction_pending"] is False
+    assert step["distance_m"] == 0.1
+    assert step["crossing_clearance_m"] >= 0.35
 
 
 def test_completion_requires_passed_plane_progress_position_and_heading():

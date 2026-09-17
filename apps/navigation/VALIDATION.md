@@ -366,6 +366,33 @@ Current integration evidence:
   provider inputs; the positive case's ambiguity remains documented. The diagnostic's 25
   offline tests pass without provider or robot calls.
 
+- Trial `runs/20260917T020157Z-84b19d29` ended with a false model arrival claim after 46 calls
+  and 383.946 s. Exact scoring of `voice-mission-019.truth.jsonl` rejected physical arrival:
+  the final body position was (-0.832, 2.130), still outside the kitchen. The run travelled
+  2.235 m net (4.335 m integrated path), with valid coverage across 3,839 truth samples,
+  maximum sample gap 0.110 s, zero obstacle contacts or falls, and an upright stopped final
+  sample. Stop was acknowledged. Both visual models accepted the second claim despite the
+  body remaining outside; the earlier eight-case visual regression suite did not cover this
+  failure. No simulator coordinates or expected verdicts entered runtime decisions.
+- Its separately reviewed pair from `view-00051` defined a 0.804 m opening and a 2.207 m
+  reference. Fifteen completed, settled path steps reached the staging area. Maximum measured
+  cross-track error was 0.0440 m and reference-heading error was 11.26 degrees. At the refusal,
+  the body was still 0.391 m before the inferred plane: holding its current heading through
+  the opening forecast only 0.322 m clearance, although current inferred-wall clearance was
+  0.522 m. The reference was discarded, then the planner issued a manual 0.20 m advance before
+  its final false claim. This demonstrates approach tracking, not successful crossing.
+- Replaying that recorded pose through the revised reference helper proposes a 0.08 m,
+  +14.66-degree correction, using the existing next reference point. Deferral requires more
+  than 0.20 m before the plane and at least 0.47 m current inferred-wall clearance. The
+  recorded pose's 0.12 m geometric displacement reserve retains at least 0.402 m clearance;
+  this does not guarantee actual gait tracking or stopping distance. Fifty-eight geometry
+  tests pass, including endpoint-order invariance and refusal near the plane. The 0.35 m
+  current-clearance and 0.37 m reference-clearance thresholds are unchanged.
+- The run also encountered one malformed doorway-review response, rejected before movement.
+  Its generic error did not retain a cause, so it cannot be attributed to truncation. The
+  reviewer now exposes safe structural diagnostics; 139 review tests cover categories,
+  redaction and strict parsing. This does not change its prompt, schema or token budget.
+
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
 

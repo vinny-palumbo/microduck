@@ -16,6 +16,7 @@ from duck_nav.gap_review import (
     REPORT_SCHEMA,
     SYSTEM,
     GeminiGapReviewer,
+    InvalidGapAssessment,
 )
 
 
@@ -372,6 +373,195 @@ def test_only_one_complete_expected_report_is_accepted(failure):
         GeminiGapReviewer.parse(data)
 
 
+@pytest.mark.parametrize(
+    "category",
+    [
+        "response_type",
+        "candidate_count",
+        "candidate_shape",
+        "finish_reason",
+        "content_parts",
+        "function_call_count",
+        "function_call_shape",
+        "tool_name",
+        "report_object",
+        "report_keys",
+        "report_flags",
+        "report_evidence",
+        "report_consistency",
+        "endpoint_format",
+        "endpoint_order",
+        "endpoint_visibility",
+    ],
+)
+def test_invalid_assessment_reports_safe_validation_category(category):
+    data = response()
+    candidate = data["candidates"][0]
+    call = candidate["content"]["parts"][0]["functionCall"]
+    args = call["args"]
+    if category == "response_type":
+        data = []
+    elif category == "candidate_count":
+        data["candidates"] = []
+    elif category == "candidate_shape":
+        data["candidates"] = [None]
+    elif category == "finish_reason":
+        candidate["finishReason"] = "MAX_TOKENS"
+    elif category == "content_parts":
+        candidate["content"]["parts"] = "private response"
+    elif category == "function_call_count":
+        candidate["content"]["parts"] = []
+    elif category == "function_call_shape":
+        candidate["content"]["parts"][0]["functionCall"] = None
+    elif category == "tool_name":
+        call["name"] = "private response"
+    elif category == "report_object":
+        call["args"] = "private response"
+    elif category == "report_keys":
+        args["private response"] = "private response"
+    elif category == "report_flags":
+        args["doorway_visible"] = "private response"
+    elif category == "report_evidence":
+        args["evidence"] = ""
+    elif category == "report_consistency":
+        args["doorway_visible"] = False
+    elif category == "endpoint_format":
+        args["best_supported_endpoints"] = [[1, 2]]
+    elif category == "endpoint_order":
+        args["best_supported_endpoints"] = [[1, 900], [2, 100]]
+    else:
+        args.update(both_contacts_visible=False, points_match_contacts=False)
+    with pytest.raises(InvalidGapAssessment, match="^invalid Gemini gap assessment$") as caught:
+        GeminiGapReviewer.parse(data)
+    assert isinstance(caught.value, ValueError)
+    assert caught.value.diagnostics["validation_category"] == category
+    assert "private response" not in json.dumps(caught.value.diagnostics)
+    assert set(vars(caught.value)) == {"diagnostics"}
+
+
+def test_diagnostics_retain_no_text_coordinates_unknown_keys_or_response():
+    private = "private-key-and-scene-content"
+    data = response(
+        report(
+            evidence=private,
+            best_supported_endpoints=[[137.123, 233.456], [444.567, 911.789]],
+            **{private: private},
+        )
+    )
+    data["candidates"][0]["content"]["parts"].append({"text": private})
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(data)
+    diagnostics = caught.value.diagnostics
+    assert diagnostics == {
+        "validation_category": "report_keys",
+        "candidate_count": 1,
+        "finish_reason": "STOP",
+        "call_count": 1,
+        "recognized_report_tool": True,
+        "known_report_keys": sorted(REPORT_SCHEMA["required"]),
+        "unknown_report_key_count": 1,
+        "flags": {
+            "doorway_visible": True,
+            "both_contacts_visible": True,
+            "points_match_contacts": True,
+        },
+        "endpoint_format": "valid_pair",
+        "endpoint_consistency": "consistent",
+    }
+    encoded = str(caught.value) + repr(caught.value) + json.dumps(diagnostics)
+    assert all(
+        value not in encoded for value in (private, "137.123", "233.456", "444.567", "911.789")
+    )
+    data.clear()
+    assert diagnostics["flags"]["doorway_visible"] is True
+
+
+@pytest.mark.parametrize("finish", ["MAX_TOKENS", "private finish", {"private": True}])
+def test_diagnostic_finish_reason_is_whitelisted(finish):
+    data = response()
+    data["candidates"][0]["finishReason"] = finish
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(data)
+    assert caught.value.diagnostics["finish_reason"] == (
+        "MAX_TOKENS" if finish == "MAX_TOKENS" else "unknown"
+    )
+    assert "private" not in json.dumps(caught.value.diagnostics)
+
+
+@pytest.mark.parametrize("flag", [1, None, "private", {"private": True}, []])
+def test_diagnostics_report_only_strict_boolean_flags(flag):
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(response(report(points_match_contacts=flag)))
+    assert caught.value.diagnostics["flags"]["points_match_contacts"] == "invalid"
+    assert caught.value.diagnostics["endpoint_consistency"] == "invalid_flags"
+    assert "private" not in json.dumps(caught.value.diagnostics)
+
+
+@pytest.mark.parametrize(
+    "changes,expected_format,expected_consistency",
+    [
+        ({"best_supported_endpoints": None}, "null", "missing_visible_pair"),
+        ({"best_supported_endpoints": "private coordinates"}, "invalid", "missing_visible_pair"),
+        ({"best_supported_endpoints": [[1, 900], [2, 100]]}, "valid_pair", "invalid_order"),
+        ({"doorway_visible": False}, "valid_pair", "contradictory_flags"),
+        (
+            {"both_contacts_visible": False, "points_match_contacts": False},
+            "valid_pair",
+            "unexpected_hidden_pair",
+        ),
+    ],
+)
+def test_diagnostics_distinguish_endpoint_shape_from_consistency(
+    changes, expected_format, expected_consistency
+):
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(response(report(**changes)))
+    assert caught.value.diagnostics["endpoint_format"] == expected_format
+    assert caught.value.diagnostics["endpoint_consistency"] == expected_consistency
+
+
+def test_missing_endpoints_are_distinct_from_null():
+    args = report()
+    del args["best_supported_endpoints"]
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(response(args))
+    assert caught.value.diagnostics["endpoint_format"] == "missing"
+    assert caught.value.diagnostics["validation_category"] == "report_keys"
+
+
+def test_unknown_report_tool_is_not_reflected_or_interpreted():
+    data = response(report(evidence="private evidence"))
+    data["candidates"][0]["content"]["parts"][0]["functionCall"]["name"] = "private tool"
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(data)
+    diagnostics = caught.value.diagnostics
+    assert diagnostics["recognized_report_tool"] is False
+    assert diagnostics["known_report_keys"] == []
+    assert all(value == "invalid" for value in diagnostics["flags"].values())
+    assert "private" not in json.dumps(diagnostics)
+
+
+def test_multiple_candidates_and_calls_are_counted_without_selecting_one():
+    data = response()
+    parts = data["candidates"][0]["content"]["parts"]
+    parts.append(copy.deepcopy(parts[0]))
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(data)
+    assert caught.value.diagnostics["call_count"] == 2
+    assert caught.value.diagnostics["recognized_report_tool"] is False
+    data["candidates"].append(copy.deepcopy(data["candidates"][0]))
+    with pytest.raises(InvalidGapAssessment) as caught:
+        GeminiGapReviewer.parse(data)
+    assert caught.value.diagnostics["candidate_count"] == 2
+    assert caught.value.diagnostics["call_count"] is None
+
+
+def test_arbitrary_diagnostic_category_is_not_echoed():
+    error = InvalidGapAssessment("private diagnostic")
+    assert error.diagnostics["validation_category"] == "unknown"
+    assert "private" not in str(error) + json.dumps(error.diagnostics)
+
+
 async def review():
     return await GeminiGapReviewer("secret").review(
         JPEG, camera=camera(), point=[560, 220], opposite_point=[495, 750]
@@ -400,11 +590,12 @@ async def test_http_contract(monkeypatch, capsys):
 @pytest.mark.asyncio
 async def test_invalid_input_fails_before_network(monkeypatch):
     sent = install_http(monkeypatch)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as caught:
         await GeminiGapReviewer("secret").review(
             JPEG, camera=camera(ground_truth={}), point=[0, 0], opposite_point=[1, 1]
         )
     assert sent == {}
+    assert not isinstance(caught.value, InvalidGapAssessment)
 
 
 @pytest.mark.asyncio
@@ -424,9 +615,10 @@ async def test_no_arbitrary_context_parameter_is_accepted(monkeypatch):
 @pytest.mark.asyncio
 async def test_http_error_never_reads_body(monkeypatch):
     sent = install_http(monkeypatch, status=403, data={"error": "secret"})
-    with pytest.raises(RuntimeError, match="^Gemini gap review HTTP 403$"):
+    with pytest.raises(RuntimeError, match="^Gemini gap review HTTP 403$") as caught:
         await review()
     assert "read_body" not in sent
+    assert not isinstance(caught.value, InvalidGapAssessment)
 
 
 @pytest.mark.asyncio
@@ -436,13 +628,25 @@ async def test_transport_errors_are_redacted(monkeypatch, error):
     with pytest.raises((RuntimeError, TimeoutError)) as caught:
         await review()
     assert "secret" not in str(caught.value)
+    assert not isinstance(caught.value, InvalidGapAssessment)
 
 
 @pytest.mark.asyncio
 async def test_invalid_json_is_redacted(monkeypatch):
     install_http(monkeypatch, json_error=ValueError("secret"))
-    with pytest.raises(ValueError, match="^invalid Gemini gap response$"):
+    with pytest.raises(InvalidGapAssessment, match="^invalid Gemini gap response$") as caught:
         await review()
+    assert caught.value.diagnostics["validation_category"] == "invalid_json"
+    assert "secret" not in json.dumps(caught.value.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_http_200_invalid_assessment_exposes_typed_diagnostics(monkeypatch):
+    install_http(monkeypatch, data=response(report(best_supported_endpoints=None)))
+    with pytest.raises(InvalidGapAssessment) as caught:
+        await review()
+    assert caught.value.diagnostics["validation_category"] == "endpoint_format"
+    assert caught.value.diagnostics["endpoint_consistency"] == "missing_visible_pair"
 
 
 @pytest.mark.asyncio
