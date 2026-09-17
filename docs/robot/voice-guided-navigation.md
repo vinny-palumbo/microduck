@@ -176,8 +176,9 @@ not guarantee a straight path or an exact final pose.
 Floor targeting uses normalized `[y,x]` image coordinates from a specific supplied view.
 For doorway alignment, both endpoints are projected separately before their midpoint is
 computed in metres; averaging pixels would bias the target through perspective. The tool
-sets a fresh course even for a zero bearing, caps each arc at ±30° and 0.10 m, and retains
+sets a fresh course even for a zero bearing, caps each requested arc at ±30° and 0.10 m, and retains
 all existing guards. It does not promise to reach the selected point or establish arrival.
+Actual motion can overshoot during driving or settling, so each result reports measured progress.
 The head must be recentered before walking; a supplied recent side image can still provide
 the target using its original camera pose. Expired, moving, unsupported or inconsistent
 views are refused without movement and count toward the observation budget.

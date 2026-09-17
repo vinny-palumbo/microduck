@@ -344,7 +344,8 @@ def declarations():
                 "the target at point, or midway between point and optional opposite_point "
                 "after projecting BOTH floor endpoints into metres. For a doorway, supply "
                 "both visible near-jamb floor contacts, not their image-space midpoint. "
-                "a fresh heading, limited to +/-30 degrees, and distance to at most 0.10 m. "
+                "a fresh requested heading within +/-30 degrees and distance up to 0.10 m. "
+                "Actual motion can overshoot; leave settling margin and inspect its result. "
                 "This is a short arc, not a pivot or a promise to reach the point. Choose "
                 "visible supported floor and allow clearance throughout the arc."
             ),

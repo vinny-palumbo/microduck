@@ -123,8 +123,9 @@ provide a single clear intermediate floor point. Do not point at an appliance,
 wall, unknown surface, or infer a point outside the image. Recenter the head before
 calling it; you may select a still-supplied side-scan image after recentering. The bridge
 uses that captured camera pose and floor geometry to establish a NEW course toward the
-point, including for zero bearing. It walks at most 0.10 m and turns at most 30 degrees
-per arc. A far-side point therefore does not cause an in-place turn or immediate entry.
+point, including for zero bearing. It requests at most 0.10 m and 30 degrees per arc;
+the actual gait can overshoot, so use measured outcomes and leave settling margin.
+A far-side point therefore does not cause an in-place turn or immediate entry.
 Inspect the fresh view after each arc. Projection assumes level supported floor and does
 not establish clearance, body fit, or arrival; judge the whole actual arc visually and
 obey depth guards. If the point cannot be projected, inspect or choose another action.
