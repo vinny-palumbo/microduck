@@ -425,6 +425,13 @@ Current integration evidence:
   suppress provider text. Twenty-six additional CLI tests pass for valid codes, enum values,
   rejected custom conversions, failed attribute access, redaction and exit status. Motion,
   retry policy, voice configuration and credentials are unchanged.
+- Follow-up access checks narrowed the setup blocker. Authenticated model discovery succeeded,
+  while both Robotics ER 2 streaming and the advertised `gemini-3.8-live` alternative closed
+  initial sessions with code 1011, including minimal configurations. A bounded diagnostic
+  recognized the fixed terms `credit`, `project`, and `depleted` in the returned reason;
+  provider text, project identifiers and credentials remained hidden. The service reports
+  depleted project credits. Further inference attempts were stopped pending restored access.
+  No fallback model configuration was shipped, and no new navigation trial was completed.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
