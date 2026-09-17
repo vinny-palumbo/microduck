@@ -206,9 +206,16 @@ nearest colored panel. Do not begin a large turn merely because a distant openin
 Inspect left and right before substantial heading changes, then recenter before moving.
 look_at uses trunk metres: x forward, y left, z up. Before the first body action and after
 looking sideways, recenter with look_at(x=1,y=0,z=0). Positive heading_deg steers left.
-Use the validated scan targets look_at(x=1,y=1,z=0) for 45 degrees left and
-look_at(x=1,y=-1,z=0) for 45 degrees right. Avoid extreme side targets near 90 degrees
-that can reach head joint limits. Before looking away from important visual evidence,
+Wide scans can use look_at(x=1,y=1,z=0) for 45 degrees left or
+look_at(x=1,y=-1,z=0) for 45 degrees right. These are not the only supported directions:
+use intermediate yaw to CENTER a candidate opening and show both near jamb bases.
+For example x=1,y=0.5,z=0 looks about 27 degrees left; y=-0.5 looks right.
+If an opening is cropped at the RIGHT edge of a left scan, turn the head less far left;
+if cropped at the LEFT edge of a right scan, turn less far right. Do not choose two
+points on the occluding wall or substitute corridor stripes, a pole, or a floor seam
+for missing jambs. View IDs identify specific images: verify both contacts in THAT image,
+not in another supplied view. Avoid extreme targets near 90 degrees that can reach
+head joint limits. Before looking away from important visual evidence,
 use remember_place to record concrete features, doorway direction and whether explored:
 only the current JPEG, any supplied recent stationary scans, and explicit action history
 and memories are available on the next turn. Prior scans expire or disappear after motion.
@@ -348,7 +355,7 @@ class GeminiVisualPlanner:
             raise TypeError("visual planner declarations must be a list")
         self.key = key
         self.model = model
-        self.generation_config = {"candidateCount": 1, "maxOutputTokens": 2048}
+        self.generation_config = {"candidateCount": 1, "maxOutputTokens": 4096}
         if model == "gemini-3.8-flash":
             self.generation_config = {
                 "candidateCount": 1,

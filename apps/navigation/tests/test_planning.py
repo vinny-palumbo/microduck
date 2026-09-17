@@ -123,7 +123,7 @@ def test_visual_model_default_contract():
     assert DEFAULT_VISUAL_MODEL == "gemini-robotics-er-2-preview"
     model = planner()
     assert model.model == DEFAULT_VISUAL_MODEL
-    assert model.generation_config == {"candidateCount": 1, "maxOutputTokens": 2048}
+    assert model.generation_config == {"candidateCount": 1, "maxOutputTokens": 4096}
     assert model.payload(context(), JPEG)["generationConfig"] == model.generation_config
 
 
@@ -703,14 +703,14 @@ async def test_http_contract(monkeypatch):
     assert sent["headers"] == {"x-goog-api-key": "secret"}
     assert sent["timeout"] == 30
     assert sent["allow_redirects"] is False
-    assert sent["json"]["generationConfig"] == {"candidateCount": 1, "maxOutputTokens": 2048}
+    assert sent["json"]["generationConfig"] == {"candidateCount": 1, "maxOutputTokens": 4096}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "name,expected_config",
     [
-        ("gemini-robotics-er-2-preview", {"candidateCount": 1, "maxOutputTokens": 2048}),
+        ("gemini-robotics-er-2-preview", {"candidateCount": 1, "maxOutputTokens": 4096}),
         (
             "gemini-3.8-flash",
             {

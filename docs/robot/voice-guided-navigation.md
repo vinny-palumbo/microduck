@@ -58,6 +58,8 @@ An invalid visual tool reply is never executed. Standard mode records only bound
 diagnostics and allows one retry with fresh images, healthy sensors and stopped movement
 commands. A second invalid reply ends the mission and requests a stop; network failures and
 timeouts are not retried this way. Voice cancellation remains active during either request.
+The standard ER 2 planner has a 4,096-token response budget after recorded 2,048-token
+requests were truncated. A larger budget does not relax image expiry or reply validation.
 
 For an experimental comparison of the standard planner, add
 `--visual-model gemini-3.8-flash`. This uses medium reasoning and an 8,192-token response
