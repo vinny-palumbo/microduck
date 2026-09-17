@@ -403,6 +403,17 @@ Current integration evidence:
   All 1,170 Python tests plus 18 subtests pass, including 242 live integration tests; Ruff and
   formatting checks pass. The new cases also preserve cancellation and fatal-guard precedence.
   Full physical arrival remains unproven until the revised behavior completes a scored run.
+- A counterfactual replay of trial 019's recorded sensors through the new entry helper used
+  16 completed, settled body actions and 47 recorded observations. Every observation remained
+  `outside`, with no crossing evidence. At arrival claims 44 and 46, the body was respectively
+  0.391464 m and 0.199493 m outside the observed plane; the final scan remained 0.199848 m
+  outside. These claims cannot satisfy the required 0.25 m inside margin. The ignored
+  `entry-gate-recorded-replay.json` in that run records hashes, event references and assumptions.
+  This is sampled reconstruction, not exact execution of the new lifecycle: initialization
+  uses a real snapshot 15.033 s early, and exact dispatch/return snapshots were not recorded.
+  Neighboring samples differ from controller-result poses by less than 0.36 mm and 0.48 degrees.
+  No simulator truth entered the helper; this supports rejecting the recorded false claim,
+  not successful completion of a new mission.
 - The next spoken trial could not start: recordings `20260917T023540Z-c6decd91` and
   `20260917T023628Z-87b77d46` both failed while opening the voice session, before a live
   navigation mission began. Subsequent robot-free handshakes using the normal configuration
