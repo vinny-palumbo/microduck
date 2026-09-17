@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 995 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 1,170 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -392,6 +392,17 @@ Current integration evidence:
   Its generic error did not retain a cause, so it cannot be attributed to truncation. The
   reviewer now exposes safe structural diagnostics; 139 review tests cover categories,
   redaction and strict parsing. This does not change its prompt, schema or token budget.
+- Body-entry evidence now persists separately from the doorway path. A settled odometry
+  segment must cross the observed plane between its jamb margins, and the body must reach
+  at least 0.25 m beyond it before visual arrival review can accept a claim. Seventy pure
+  tests cover crossing direction, margins, stale or unexpected poses, expiry, interruption,
+  head-scan drift, and crossing outside the opening followed by lateral motion. This uses
+  discrete sensor estimates, not simulator truth or a certified continuous trajectory.
+  The runtime checks entry before clearing a usable approach, after arrival head scans, and
+  after the provider returns. `unknown` evidence cannot be discarded to accept a visual claim.
+  All 1,170 Python tests plus 18 subtests pass, including 242 live integration tests; Ruff and
+  formatting checks pass. The new cases also preserve cancellation and fatal-guard precedence.
+  Full physical arrival remains unproven until the revised behavior completes a scored run.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

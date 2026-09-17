@@ -7,7 +7,7 @@ live voice workflow. The [navigation bridge README](../../apps/navigation/README
 owns the sensor, gaze, and stop guards; [the simulator guide](simulation.md) owns simulator setup.
 
 This is work in progress. Live model runs have accepted a prerecorded spoken kitchen instruction
-and travelled up to 1.93 m from the start without collisions or falls. The best clean run reached
+and travelled up to 2.23 m from the start without collisions or falls. A clean run reached
 the doorway, but full entry has not yet been demonstrated; independent scoring rejected
 premature model arrival claims. Trial 011 explored the wrong room and contacted furniture
 outside the forward depth sensor's view, so it failed the collision criterion. These
@@ -209,7 +209,10 @@ opening, both visible near jamb-floor contacts, and agreement with the selected 
 Missing or negative review refuses the pair. Three recorded probes rejected a corridor-wall
 proposal and a cropped opening but accepted a pair with a small floor-seam ambiguity: this
 review catches some semantic mistakes and does not certify endpoint precision. After the
-review, source age, body pose, stopped commands, and local guards are checked again.
+review, source age, body pose, stopped commands, and local guards are checked again. Malformed
+review replies are refused and recorded with bounded structural diagnostics; raw provider
+responses are not logged. These diagnostics distinguish truncation and schema failures without
+changing the review criteria.
 The first call takes one step; each later `follow_gap()` takes at most another
 0.10 m with a requested heading within ±30°. The planner receives a fresh image, current depth,
 and `gap_plan` status, phase, progress, remaining length, doorway width, source view and target
@@ -237,6 +240,11 @@ separate visual arrival review is still required.
 The 0.37 m margin applies to inferred reference geometry. The actual depth guard remains
 0.35 m, and the helper also checks current inferred-wall clearance and crossing alignment
 against 0.35 m. These are different checks; neither certifies clearance for every body part.
+When the body is more than 0.20 m before the plane and has at least 0.47 m of current inferred-wall
+clearance, a poor straight-line crossing forecast can allow one corrective step of at most
+0.08 m. Every point within a 0.12 m displacement radius then retains 0.35 m of inferred-wall
+clearance. This is a geometric reserve, not a bound on actual gait motion or settling. Closer
+to the plane, the crossing-alignment check remains mandatory. Each subsequent step is reassessed.
 Reference segments are sampled and checked against inferred walls with a curved-segment
 deviation allowance. They do not account for unseen obstacles, uncertain endpoint locations,
 or the gait's ability to track that curvature. Progress and deviations are checked again using
@@ -244,7 +252,9 @@ the measured pose after each settled step; actual walking can overshoot or under
 
 A new floor target or ordinary body movement abandons the previous reference. Expiry,
 unexpected movement, tracking or geometry refusal, failed or interrupted motion, failed gaze,
-stop, arrival review, and mission termination also clear it. A refusal requests a stop; the
+stop, visual arrival review, and mission termination also clear it. A premature arrival claim
+rejected by the body-entry check below can retain an otherwise valid reference. A refusal
+requests a stop; the
 planner must inspect a fresh view, choose another route, or finish blocked. It is instructed
 not to replace a geometrically refused doorway pair with a manual arc or single point to
 squeeze through the same gap. This instruction does not add a global map or prove another
@@ -276,7 +286,21 @@ asks the model to continue only after its preceding turn completes. Recent actio
 remembered places support exploration without a supplied floor plan. Place memory is saved in
 the recording, but is not automatically loaded into a later run.
 
-Before accepting an arrival claim, the bridge stops and collects fresh forward and side views.
+After accepting a reviewed doorway pair, the bridge separately tracks body entry relative to
+that observed plane. `doorway_entry` reports `outside`, `inside`, or `unknown`; the path's
+`crossing` phase alone does not establish entry. Settled odometry must support crossing between
+the inferred jamb margins and reaching at least 0.25 m beyond the plane. Crossing is estimated
+by interpolating the measured positions before and after a settled walking action; this does
+not reconstruct the intervening trajectory. This estimate uses observed geometry and robot
+odometry only. It does not identify the room or certify clearance.
+The evidence survives path clearing and ordinary walking, but stale telemetry, unexpected
+motion, expiry or an unsettled action latch `unknown` until a new reviewed pair establishes a
+reference. Idle head scans never move its body-pose anchor.
+
+Before accepting an arrival claim, the bridge stops. If a doorway entry reference exists,
+`outside` or `unknown` prevents acceptance and returns the original goal and current evidence
+to the planner. `inside` still requires fresh forward and side views and visual review.
+Without a reviewed doorway reference, arrival continues to rely on the visual check alone.
 A separate, stateless visual reviewer receives only those images and the destination. It checks
 room identity and full-body entry separately, including near-floor transitions and doorjambs in
 side views. If it cannot establish that the duck has crossed the entrance, its visual evidence

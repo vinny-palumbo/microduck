@@ -35,6 +35,7 @@ CONTEXT_KEYS = frozenset(
         "progress_budget",
         "course",
         "gap_plan",
+        "doorway_entry",
     }
 )
 CAMERA_KEYS = frozenset(
@@ -254,7 +255,9 @@ select a still-supplied side-scan image after recentering. Each call requests at
 leave settling margin. A far-side point does not cause an in-place turn or immediate entry.
 
 Read gap_plan for the retained approach's status, phase, measured progress and remaining
-distance, doorway width, source view, and target heading. After a paired-point plan's first
+distance, doorway width, source view, and target heading. phase="crossing" identifies the
+reference segment after staging; it does not mean the body has already crossed the doorway.
+After a paired-point plan's first
 step, inspect each fresh image and the current depth, then call follow_gap() with NO
 arguments for one further bounded step when that approach remains visibly safe and ready
 is true. Head scans are allowed; recenter before following. Any non-gap body movement
@@ -266,7 +269,7 @@ arc visually, obey current depth guards, and reassess the approach after every s
 If doorway geometry is refused, do not switch to manual advance or a single point to
 squeeze through that same gap. Inspect another view to resolve the geometry, choose a
 different route, or finish blocked when no safe option remains. Never move to bypass a
-projection or path-feasibility refusal.
+projection or path-feasibility refusal, or substitute a premature arrival claim for it.
 
 Only advance when ready is true. Treat local guards as authoritative. A null depth return
 is not certified clearance; consider known zones, floor returns, and visible obstacles.
@@ -282,6 +285,15 @@ remains blocked and no safe movement exists, finish blocked instead of repeating
 Seeing the destination through a doorway is not arrival. finish(goal_observed) requires
 visible evidence that the whole BODY has crossed the near threshold with room to spare.
 The camera projects ahead of the body, so its view alone does not establish full entry.
+When doorway_entry is available, its outside or unknown status prevents finish(goal_observed),
+even if the camera view appears entirely inside the destination. Use this measured body-pose
+crossing estimate for the observed doorway plane; a camera impression or gap_plan phase cannot
+override it. signed_outside_m is positive on the approach side and negative beyond the plane;
+required_inside_m states the required body margin beyond it. An inside status supports only
+crossing that observed plane: it does not identify the room, certify clearance, or verify arrival.
+Continue an active valid gap plan only while current guards and visible clearance support it,
+or inspect fresh geometry; do not replace a refused approach with manual movement or an arrival
+claim. If no safe supported continuation remains, finish blocked.
 Describe what is actually visible and the uncertainty; do not invent cabinets or appliances
 from plain walls/floors.
 An independent arrival reviewer may reject a claim. Read arrival_review and arrival_claims:

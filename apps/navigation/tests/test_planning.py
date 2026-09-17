@@ -246,6 +246,44 @@ def test_observed_gap_plan_is_passed_without_replacing_goal_or_current_guard(gap
     assert current == original
 
 
+@pytest.mark.parametrize(
+    "status,signed_distance", [("outside", 0.2), ("inside", -0.3), ("unknown", None)]
+)
+def test_observed_doorway_entry_is_preserved_alongside_visual_and_guard_context(
+    status, signed_distance
+):
+    entry = {
+        "status": status,
+        "reason": "measured_body_pose_against_observed_plane",
+        "signed_outside_m": signed_distance,
+        "required_inside_m": 0.25,
+        "source_view_id": "view-00037",
+        "source": "observed_doorway_and_robot_odometry",
+        "arrival_verified": False,
+    }
+    current = context(
+        doorway_entry=entry,
+        gap_plan={"status": "advance", "phase": "crossing"},
+        ready=False,
+        guard_reason="obstacle",
+        arrival_review={"destination_visible": True, "inside_destination": True},
+    )
+    original = copy.deepcopy(current)
+    payload = planner().payload(current, JPEG)
+    assert json.loads(payload["contents"][0]["parts"][0]["text"]) == original
+    assert current == original
+    instruction = payload["systemInstruction"]["parts"][0]["text"]
+    assert "outside or unknown status prevents finish(goal_observed)" in instruction
+    assert 'phase="crossing" identifies the' in instruction
+    assert "it does not mean the body has already crossed the doorway" in instruction
+    assert "it does not identify the room, certify clearance, or verify arrival" in instruction
+
+
+def test_doorway_entry_can_be_unavailable_without_inventing_an_entry_estimate():
+    parts = planner().payload(context(doorway_entry=None), JPEG)["contents"][0]["parts"]
+    assert json.loads(parts[0]["text"])["doorway_entry"] is None
+
+
 def test_stateless_payload_has_one_current_image_and_explicit_context():
     model = planner()
     old, new = jpeg("red"), jpeg("blue")
@@ -415,7 +453,7 @@ def test_unknown_context_is_rejected(extra):
 @pytest.mark.parametrize(
     "key", ["simulator_truth", "simulator_ground_truth", "ground_truth", "qpos", "qvel"]
 )
-@pytest.mark.parametrize("field", ["recent_actions", "gap_plan"])
+@pytest.mark.parametrize("field", ["recent_actions", "gap_plan", "doorway_entry"])
 def test_nested_raw_truth_is_rejected(key, field):
     with pytest.raises(ValueError, match="simulator truth is forbidden"):
         planner().payload(context(**{field: [{"result": {key: [1, 2, 3]}}]}), JPEG)

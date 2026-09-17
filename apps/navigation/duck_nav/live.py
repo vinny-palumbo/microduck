@@ -21,7 +21,9 @@ from .audio import PcmActivity, microphone_chunks, speak_local, wav_chunks
 from .cli import TOOLS, Recorder, dispatch
 from .core import _number, _rotate, _unit, _vector
 from .credentials import load_gemini_key
+from .entry import DoorwayEntry
 from .gap_path import build_gap_path, path_step
+from .gap_review import InvalidGapAssessment
 from .navigation import GaitNavigator
 from .transport import WebRtcRobot
 from .waypoints import captures_stationary, project_floor_point
@@ -527,6 +529,7 @@ class LiveMission:
         self.supplied_view_ids = set()
         self.gap_plan = None
         self.gap_summary = None
+        self.entry_reference = None
         self.navigation_model = (
             getattr(navigation_planner, "model", "injected-visual-planner")
             if navigation_planner is not None
@@ -571,6 +574,10 @@ class LiveMission:
             # the selected frame, after throttling and before the network send can
             # yield; its clearance must describe the image accompanying the result.
             observation = await self.robot.observe()
+            if self.entry_reference is not None:
+                # Latch any observed body drift at capture time, before a network
+                # wait can hide it with a later sample that returned to the anchor.
+                self.entry_observation(snapshot)
             jpeg = _jpeg(snapshot)
             camera_view, image_path = self.stationary_views.retain(
                 snapshot,
@@ -607,6 +614,7 @@ class LiveMission:
         context["camera"] = copy.deepcopy(observation.get("camera_view"))
         context["course"] = copy.deepcopy(observation.get("course"))
         context["gap_plan"] = copy.deepcopy(self.gap_summary)
+        context["doorway_entry"] = self.entry_observation()
         if context["camera"] is not None:
             context["camera"]["age_s"] = max(
                 0.0, time.monotonic() - context["camera"]["received_at"]
@@ -625,6 +633,8 @@ class LiveMission:
         if self.recovery is None:
             return None
         observation = await self.robot.observe()
+        if self.done.is_set():
+            raise asyncio.CancelledError
         guard_reason = observation["guard_reason"]
         fatal_guard = guard_reason is not None and guard_reason not in RECOVERABLE_GUARD_REASONS
         previous = self.recovery["failed_arguments"]
@@ -645,6 +655,8 @@ class LiveMission:
         if reason is None:
             return None
         stopped = await self.robot.stop()
+        if self.done.is_set():
+            raise asyncio.CancelledError
         if fatal_guard:
             # Preserve the first unsafe observation even if telemetry recovers during
             # stop acknowledgement. A later fresh image cannot downgrade this failure.
@@ -865,26 +877,113 @@ class LiveMission:
         if reason not in (None, "obstacle") or (reason is None and not observation["ready"]):
             raise RuntimeError(f"Arrival review stopped by guard: {reason or 'not_ready'}")
 
-    async def review_arrival(self):
-        """Test an arrival claim against fresh views, without giving the reviewer the claim."""
+    def entry_observation(self, snapshot=None):
+        if self.entry_reference is None:
+            return None
+        if snapshot is None:
+            snapshot = self.transport.snapshot()
+        return self.entry_reference.observation(snapshot, now=time.monotonic())
+
+    def entry_rejection(self, summary, observation):
+        self.result["doorway_entry"] = copy.deepcopy(summary)
+        self.record("entry_rejected", claim=self.arrival_claims, doorway_entry=summary)
+        outcome = {
+            "status": "entry_not_confirmed",
+            "goal_verified": False,
+            "goal": self.goal,
+            "doorway_entry": copy.deepcopy(summary),
+            "observation": self.context(observation),
+            "guidance": (
+                "Measured body entry through the observed doorway is not established. "
+                "The original user goal remains active. Outside requires completing a safe "
+                "approach and crossing; unknown requires fresh reviewed doorway geometry. "
+                "Do not use an arrival claim to bypass a guard or reference refusal."
+            ),
+        }
+        if self.arrival_claims >= 3:
+            self.result.update(status="blocked", reason="Three arrival claims were not confirmed")
+            outcome["status"] = "blocked"
+        else:
+            outcome["continue_navigation"] = True
+        return outcome
+
+    async def arrival_entry_gate(self):
+        """Stop and check body entry before clearing a usable path or asking a model."""
+        if self.done.is_set():
+            raise asyncio.CancelledError
         self.arrival_claims += 1
+        observation = await self.robot.observe()
+        if self.done.is_set():
+            raise asyncio.CancelledError
+        snapshot = self.transport.snapshot()
+        self.check_arrival_guard(snapshot, observation)
+        # Preserve any pose uncertainty already seen before the stop/fresh-frame
+        # wait; settling back to an earlier anchor cannot erase that observation.
+        self.entry_observation(snapshot)
         stopped = await self.robot.stop()
+        if self.done.is_set():
+            raise asyncio.CancelledError
+        if stopped.get("completed") is not True:
+            self.result.update(status="error", reason="Arrival entry stop was not acknowledged")
+            return {"status": "error", "goal_verified": False, "stop": stopped}
+        snapshot, observation = await fresh_observation(
+            self.robot,
+            self.transport,
+            time.monotonic(),
+            self.config.observation_timeout_s,
+        )
+        if self.done.is_set():
+            raise asyncio.CancelledError
+        self.check_arrival_guard(snapshot, observation)
+        summary = self.entry_observation(snapshot)
+        self.result["doorway_entry"] = copy.deepcopy(summary)
+        self.record("doorway_entry_checked", claim=self.arrival_claims, doorway_entry=summary)
+        if summary["status"] != "inside":
+            return self.entry_rejection(summary, observation)
+        return None
+
+    async def review_arrival(self, *, claim_counted=False):
+        """Test an arrival claim against fresh views, without giving the reviewer the claim."""
+        if self.done.is_set():
+            raise asyncio.CancelledError
+        if not claim_counted:
+            self.arrival_claims += 1
+        stopped = await self.robot.stop()
+        if self.done.is_set():
+            raise asyncio.CancelledError
         if stopped.get("completed") is not True:
             self.result.update(status="error", reason="Arrival review stop was not acknowledged")
             return {"status": "error", "goal_verified": False, "stop": stopped}
         views, references = [], []
         self.record("arrival_review_started", claim=self.arrival_claims, goal=self.goal)
         for label, y in (("front", 0), ("left45", 1), ("right45", -1), ("front_final", 0)):
+            if self.done.is_set():
+                raise asyncio.CancelledError
             outcome = await self.robot.look_at(x=1, y=y, z=0)
+            if self.done.is_set():
+                raise asyncio.CancelledError
             if outcome.get("completed") is not True:
                 raise RuntimeError(f"Arrival scan did not settle: {outcome.get('reason')}")
-            await fresh_observation(
+            snapshot, observation = await fresh_observation(
                 self.robot,
                 self.transport,
                 time.monotonic(),
                 self.config.observation_timeout_s,
             )
-            snapshot, _ = await self.image()
+            if self.done.is_set():
+                raise asyncio.CancelledError
+            entry = self.entry_observation(snapshot)
+            if entry is not None and entry["status"] != "inside":
+                return self.entry_rejection(entry, observation)
+            snapshot, observation = await self.image()
+            if self.done.is_set():
+                raise asyncio.CancelledError
+            # image() checked this capture before sending it. Check current state
+            # now, preserving that latched result without aging the old snapshot
+            # across the image-send await.
+            entry = self.entry_observation()
+            if entry is not None and entry["status"] != "inside":
+                return self.entry_rejection(entry, observation)
             jpeg = _jpeg(snapshot)
             path = self.recorder.path / f"arrival-{self.arrival_claims:02d}-{label}.jpg"
             path.write_bytes(jpeg)
@@ -893,20 +992,60 @@ class LiveMission:
             self.record("arrival_review_view", claim=self.arrival_claims, **references[-1])
         if self.recovery is not None:
             self.recovery["inspected"] = True
+        if self.entry_reference is not None:
+            observation = await self.robot.observe()
+            if self.done.is_set():
+                raise asyncio.CancelledError
+            snapshot = self.transport.snapshot()
+            self.check_arrival_guard(snapshot, observation)
+            entry = self.entry_observation(snapshot)
+            self.result["doorway_entry"] = copy.deepcopy(entry)
+            if entry["status"] != "inside":
+                return self.entry_rejection(entry, observation)
         review = await self.arrival_reviewer.review(self.goal, views)
+        if self.done.is_set():
+            raise asyncio.CancelledError
         self.result.update(arrival_review=review, arrival_images=references)
         # Cloud review can outlive the observations it assessed. Check immediately
         # so a transient fatal guard cannot disappear while awaiting the next frame,
         # then require a new frame with stopped commands before accepting arrival.
         observation = await self.robot.observe()
-        self.check_arrival_guard(self.transport.snapshot(), observation)
+        if self.done.is_set():
+            raise asyncio.CancelledError
+        snapshot = self.transport.snapshot()
+        self.check_arrival_guard(snapshot, observation)
+        entry = self.entry_observation(snapshot)
+        if entry is not None and entry["status"] != "inside":
+            self.record(
+                "arrival_review_finished",
+                claim=self.arrival_claims,
+                accepted=False,
+                review=review,
+                images=references,
+                doorway_entry=entry,
+            )
+            return self.entry_rejection(entry, observation)
         snapshot, observation = await fresh_observation(
             self.robot,
             self.transport,
             time.monotonic(),
             self.config.observation_timeout_s,
         )
+        if self.done.is_set():
+            raise asyncio.CancelledError
         self.check_arrival_guard(snapshot, observation)
+        entry = self.entry_observation(snapshot)
+        self.result["doorway_entry"] = copy.deepcopy(entry)
+        if entry is not None and entry["status"] != "inside":
+            self.record(
+                "arrival_review_finished",
+                claim=self.arrival_claims,
+                accepted=False,
+                review=review,
+                images=references,
+                doorway_entry=entry,
+            )
+            return self.entry_rejection(entry, observation)
         accepted = (
             review.get("destination_visible") is True and review.get("inside_destination") is True
         )
@@ -985,9 +1124,13 @@ class LiveMission:
         }
 
     async def gap_refusal(self, detail, *, fatal=False):
+        if self.done.is_set():
+            raise asyncio.CancelledError
         self.clear_gap(detail)
         self.gap_summary = {"status": "refused", "reason": detail}
         stopped = await self.robot.stop()
+        if self.done.is_set():
+            raise asyncio.CancelledError
         if fatal or stopped.get("completed") is not True:
             self.result.update(status="blocked", reason=f"Doorway approach stopped: {detail}")
         result = {
@@ -1017,6 +1160,8 @@ class LiveMission:
         if self.done.is_set():
             raise asyncio.CancelledError
         observation = await self.robot.observe()
+        if self.done.is_set():
+            raise asyncio.CancelledError
         guard_reason = observation["guard_reason"]
         if guard_reason is not None and guard_reason not in RECOVERABLE_GUARD_REASONS:
             return await self.gap_refusal(guard_reason, fatal=True)
@@ -1086,8 +1231,12 @@ class LiveMission:
         self.record("gap_step_measured", step=step, gap_plan=self.gap_summary)
 
     async def floor_fatal_guard(self, guard_reason):
+        if self.done.is_set():
+            raise asyncio.CancelledError
         self.clear_gap("fatal_guard")
         stopped = await self.robot.stop()
+        if self.done.is_set():
+            raise asyncio.CancelledError
         self.result.update(
             status="blocked", reason=f"Floor targeting stopped by guard: {guard_reason}"
         )
@@ -1122,6 +1271,8 @@ class LiveMission:
             if any(not 0 <= value <= 1000 for value in opposite):
                 raise ValueError("Opposite floor point coordinates must be [y,x] in 0–1000")
         observation = await self.robot.observe()
+        if self.done.is_set():
+            raise asyncio.CancelledError
         guard_reason = observation["guard_reason"]
         if guard_reason is not None and guard_reason not in RECOVERABLE_GUARD_REASONS:
             return await self.floor_fatal_guard(guard_reason)
@@ -1168,6 +1319,8 @@ class LiveMission:
                 # A cloud review is an interpretation of a past image. It cannot
                 # extend its lifetime, permit movement, or erase a fresh fatal guard.
                 observation = await self.robot.observe()
+                if self.done.is_set():
+                    raise asyncio.CancelledError
                 guard_reason = observation["guard_reason"]
                 if guard_reason is not None and guard_reason not in RECOVERABLE_GUARD_REASONS:
                     return await self.floor_fatal_guard(guard_reason)
@@ -1196,7 +1349,26 @@ class LiveMission:
             distance = min(maximum, remaining - 0.03)
             if reference is None and distance < 0.05:
                 raise ValueError("floor_target_too_near")
+            new_entry = (
+                DoorwayEntry(reference, view_id, snapshot, now=time.monotonic())
+                if reference is not None
+                else None
+            )
         except (KeyError, TypeError, ValueError, IndexError) as error:
+            if self.done.is_set():
+                raise asyncio.CancelledError from None
+            if isinstance(error, InvalidGapAssessment):
+                self.record(
+                    "gap_review_rejected",
+                    view_id=view_id,
+                    diagnostics=copy.deepcopy(error.diagnostics),
+                )
+                observation = await self.robot.observe()
+                if self.done.is_set():
+                    raise asyncio.CancelledError from None
+                guard_reason = observation["guard_reason"]
+                if guard_reason is not None and guard_reason not in RECOVERABLE_GUARD_REASONS:
+                    return await self.floor_fatal_guard(guard_reason)
             # A bad or expired point is an observation failure, never permission
             # to guess a bearing. The autonomous no-progress budget still applies.
             stopped = await self.robot.stop()
@@ -1241,6 +1413,8 @@ class LiveMission:
             target_evidence["gap_review"] = copy.deepcopy(gap_review)
         self.record("floor_target_resolved", **target_evidence)
         if reference is not None:
+            self.entry_reference = new_entry
+            self.record("doorway_entry_created", doorway_entry=self.entry_observation())
             self.gap_plan = {
                 "reference": reference,
                 "progress_s": 0.0,
@@ -1259,6 +1433,8 @@ class LiveMission:
         )
 
     async def execute_tool(self, name, args, *, _floor_target=None, _gap_motion=False):
+        if self.done.is_set():
+            raise asyncio.CancelledError
         if not isinstance(args, dict):
             raise TypeError("Tool arguments must be an object")
         expected = {
@@ -1390,8 +1566,15 @@ class LiveMission:
             reason = _text(args["reason"], "reason", 1000)
             if not self.goal or args["status"] not in ("goal_observed", "blocked"):
                 raise ValueError("Finish requires an active goal and a valid status")
+            entry_checked = args["status"] == "goal_observed" and self.entry_reference is not None
+            if entry_checked:
+                refusal = await self.arrival_entry_gate()
+                if refusal is not None:
+                    return refusal
             self.clear_gap("arrival_review_or_finish")
             if args["status"] == "goal_observed" and self.arrival_reviewer is not None:
+                if entry_checked:
+                    return await self.review_arrival(claim_counted=True)
                 return await self.review_arrival()
             self.result.update(status=args["status"], reason=reason)
             return {"status": args["status"], "goal_verified": False}
@@ -1429,6 +1612,7 @@ class LiveMission:
         if not self.goal and name != "observe":
             raise ValueError("Movement requires an active user goal")
         before = self.transport.snapshot()
+        dispatched_advance = False
         if name == "advance":
             if not _gap_motion:
                 self.clear_gap("other_body_motion")
@@ -1439,24 +1623,45 @@ class LiveMission:
                 # for new sensors that could hide a transient fatal condition.
                 return {**decision, "result": result}
             if result is None:
+                before = self.transport.snapshot()
                 # Even an interrupted or refused body dispatch invalidates old gaze
                 # views; subsequent planning must use newly measured stationary views.
                 self.stationary_views.clear()
                 extra = {"new_course": True} if _floor_target is not None else {}
                 try:
+                    dispatched_advance = True
                     result = await self.robot.advance(**decision["arguments"], **extra)
                 except BaseException:
                     self.clear_gap("body_motion_interrupted")
+                    if self.entry_reference is not None:
+                        self.entry_reference.note_motion(
+                            before,
+                            self.transport.snapshot(),
+                            {"completed": False},
+                            now=time.monotonic(),
+                        )
                     raise
+                if self.entry_reference is not None:
+                    # Bind entry progress to the settled action's completion, before
+                    # image sends or other network waits can admit unrelated motion.
+                    summary = self.entry_reference.note_motion(
+                        before, self.transport.snapshot(), result, now=time.monotonic()
+                    )
+                    self.record("doorway_entry_motion", doorway_entry=summary)
         else:
             result = await dispatch(self.robot, {"tool": name, "arguments": decision["arguments"]})
-        await fresh_observation(
-            self.robot,
-            self.transport,
-            time.monotonic(),
-            self.config.observation_timeout_s,
-        )
-        after, observation = await self.image()
+        try:
+            await fresh_observation(
+                self.robot,
+                self.transport,
+                time.monotonic(),
+                self.config.observation_timeout_s,
+            )
+            after, observation = await self.image()
+        except BaseException:
+            if dispatched_advance and self.entry_reference is not None:
+                self.entry_observation()
+            raise
         entry = {"tool": name, "arguments": decision["arguments"], "reason": decision["reason"]}
         if _floor_target is not None:
             entry["floor_target"] = copy.deepcopy(_floor_target)
@@ -1670,6 +1875,7 @@ class LiveMission:
                 navigation_model=self.navigation_model,
                 navigation_generation_config=self.navigation_generation_config,
                 remembered_places=self.places,
+                doorway_entry=self.entry_observation(),
             )
             if not stopped.get("completed"):
                 self.result.update(status="error", reason="Final stop was not acknowledged")

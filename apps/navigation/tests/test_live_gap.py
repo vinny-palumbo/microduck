@@ -141,21 +141,22 @@ async def test_new_route_or_terminal_tool_clears_gap_reference(tmp_path, project
     assert worker.gap_plan is None
 
 
-async def test_arrival_review_clears_reference_even_if_claim_is_rejected(tmp_path, projected_gap):
+async def test_arrival_claim_preserves_reference_until_body_enters(tmp_path, projected_gap):
     worker = mission(tmp_path)
     await start_gap(worker)
+    reference = copy.deepcopy(worker.gap_plan)
     worker.arrival_reviewer = object()
 
-    async def review():
-        assert worker.gap_plan is None
-        return {"status": "arrival_not_confirmed", "continue_navigation": True}
+    async def review(**_):
+        raise AssertionError("Visual review cannot establish body entry")
 
     worker.review_arrival = review
     result = await worker.execute_tool(
         "finish", {"status": "goal_observed", "reason": "Candidate destination"}
     )
+    assert result["status"] == "entry_not_confirmed"
     assert result["continue_navigation"] is True
-    assert worker.gap_plan is None
+    assert worker.gap_plan == reference
 
 
 @pytest.mark.parametrize("failure", ["expired", "translation", "yaw"])
