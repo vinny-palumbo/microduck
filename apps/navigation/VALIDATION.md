@@ -244,6 +244,12 @@ Current integration evidence:
   after each translating arc. A separate wording correction requires full-body entry rather
   than just camera entry; that correction was not part of the six replay calls. All 149 planner
   tests and Ruff passed. No runtime map or simulator geometry was introduced.
+- Run `runs/20260917T002022Z-a2a13587` still approached the near jamb and stopped blocked
+  after 26 calls and 187.3 s. Exact scoring of `voice-mission-014.truth.jsonl` found 1.577 m net
+  displacement, valid coverage across 1,873 samples, zero contacts or falls, and no arrival.
+  The final left scan retained the close jamb after recentering. The doorway prompt therefore
+  did not solve approach alignment in this full trial; merely describing the near threshold
+  is insufficient evidence that the selected turn angles lead through its center.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
