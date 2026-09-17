@@ -153,7 +153,7 @@ goals and cancellation. Both use the same stop mechanism.
 | `start_navigation(goal)` | Accept the spoken task; preserve the original goal if it is already active. |
 | `observe()` | Read current camera/sensor readiness, depth summary, and robot odometry. |
 | `look_at(x, y, z)` | Aim the camera toward a trunk-frame point in metres: x forward, y left, z up. |
-| `advance(distance_m, heading_deg=0)` | Walk a short arc using robot odometry, stop, and check settling; positive heading steers left. |
+| `advance(distance_m, heading_deg=0)` | Walk a short arc, stop, and check settling. Zero holds the requested course; nonzero changes it relative to the current body heading, positive left. |
 | `remember_place(name, observation, explored)` | Retain visual observations and explored places in the current mission. |
 | `say(message)` | Display a brief update and optionally play local TTS. |
 | `stop()` | Cancel the mission and request that the duck stand still. |
@@ -163,6 +163,14 @@ goals and cancellation. Both use the same stop mechanism.
 movement; a completed, settled action does not promise an exact target pose. The next decision
 uses the resulting camera image and odometry. Its walking command calibration is separate from
 the legacy `duck-nav move_for` and `duck-nav turn_by` limits documented in the bridge README.
+
+Zero heading continues the last requested heading in the robot's odometry frame, so it can
+curve to correct drift left by an earlier step. A nonzero heading sets a new target relative
+to the current body direction. Observations expose the course target and current error;
+results distinguish the supplied heading from the effective correction. A stop, failed action,
+reinitialization, or unexpected movement clears the retained target. A correction beyond ±30°
+is refused. The planner still needs room for the whole corrective arc; holding a heading does
+not guarantee a straight path or an exact final pose.
 
 Depth observations include left, center, and right sectors in the robot's trunk frame, plus the
 sensor's current yaw. Side scans report what the sensor sees while keeping forward movement

@@ -1025,6 +1025,35 @@ class VisualPlanner:
         return next(self.decisions)
 
 
+async def test_visual_planner_receives_current_course_before_and_after_walking(
+    tmp_path, fast_images
+):
+    class CourseRobot(Robot):
+        async def observe(self):
+            return {
+                **await super().observe(),
+                "course": {
+                    "active": True,
+                    "target_yaw_deg": 90.0,
+                    "error_deg": 12.0 if self.distance == 0 else 3.0,
+                    "reset_reason": None,
+                },
+            }
+
+    planner = VisualPlanner(
+        [
+            {"name": "advance", "args": {"distance_m": 0.1, "reason": "Clear corrective arc"}},
+            {"name": "finish", "args": {"status": "blocked", "reason": "No onward route"}},
+        ]
+    )
+    result, _, _ = await run(
+        tmp_path, Session(), CourseRobot(), goal="Kitchen", navigation_planner=planner
+    )
+    assert result["status"] == "blocked"
+    assert [context["course"]["error_deg"] for context in planner.contexts] == [12.0, 3.0]
+    assert all(context["course"]["target_yaw_deg"] == 90.0 for context in planner.contexts)
+
+
 def camera_snapshot(yaw_deg=0, pitch_deg=0, *, body_yaw=0, position=(0, 0, 0.12)):
     snapshot = Robot().snapshot()
     yaw, tilt = math.radians(yaw_deg) / 2, (math.pi / 2 - math.radians(pitch_deg)) / 2

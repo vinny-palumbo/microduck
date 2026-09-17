@@ -50,6 +50,7 @@ def context(**changes):
         "depth": {},
         "odometry": {"position": [0.1, 0.2, 0.12], "yaw": 0.1},
         "motion": {"requested": [0, 0, 0]},
+        "course": {"active": True, "target_yaw_deg": 20, "error_deg": 14.3, "reset_reason": None},
         "recent_actions": [{"source": "robot_odometry_not_simulator_ground_truth"}],
         "remembered_places": {},
         "recovery": None,

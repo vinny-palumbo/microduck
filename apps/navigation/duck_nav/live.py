@@ -48,7 +48,10 @@ Take one bounded action at a time, assess the fresh camera image and measured pr
 and choose the next step. Every tool is blocking. Call exactly one tool at a time,
 including mission, memory, and speech tools; never batch calls.
 advance walks a short measured distance, optionally steering in an arc. Positive
-heading_deg angles steer left. Allow clearance for the whole arc; do not turn in place.
+nonzero heading_deg angles steer left relative to the current body heading. Zero continues
+the last requested travel heading, correcting measured drift; it can curve even when the
+argument is zero. Read course for the current target and error. With no active course, zero
+captures the current body heading. Allow clearance for the whole arc; do not turn in place.
 Reserve 0.20 m actions for clearly open straight space. Use short 0.10 m arcs when aligning
 with a nearby doorway, then reassess actual measured heading; the requested heading is not
 guaranteed, and a long curved step can pass an opening before alignment is complete.
@@ -271,7 +274,12 @@ def declarations():
     tools.append(
         {
             "name": "advance",
-            "description": "Walk a measured distance, steering in an arc if requested; positive heading is left. Needs clear space throughout the arc.",
+            "description": (
+                "Walk a measured distance. Zero heading holds the last requested travel heading "
+                "and may curve to correct drift; with no active course it captures the current "
+                "heading. Nonzero heading is relative to the current body, positive left. "
+                "Inspect course and allow clear space throughout the corrective arc."
+            ),
             "parameters": {
                 "type": "object",
                 "additionalProperties": False,
@@ -496,6 +504,7 @@ class LiveMission:
         context["arrival_claims"] = self.arrival_claims
         context["progress_budget"] = self.progress_budget()
         context["camera"] = copy.deepcopy(observation.get("camera_view"))
+        context["course"] = copy.deepcopy(observation.get("course"))
         if context["camera"] is not None:
             context["camera"]["age_s"] = max(
                 0.0, time.monotonic() - context["camera"]["received_at"]

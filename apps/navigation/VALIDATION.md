@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 508 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 540 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -197,6 +197,35 @@ Current integration evidence:
   cover body-command refusal, continued head recovery, invalid/stale scans, upward gaze, pose
   drift, tilt, sensor lever arms, capacity and valid rescans. All 508 tests plus 18 subtests and
   Ruff passed. The final planner prompt also matches the tested comparison's SHA-256 exactly.
+- Follow-up run `runs/20260916T235423Z-31891829` stopped blocked after 19 calls and 137.1 s.
+  A right-side obstacle approximately 0.27 m away remained blocked after recentering and a
+  repeated side scan. Independent scoring of `voice-mission-012.truth.jsonl` found 0.578 m net
+  movement, complete coverage across 1,371 samples, zero obstacle contacts or falls, and no
+  arrival. The guard now preserves this observed hazard, but reaching the kitchen remains open.
+- A bounded offline comparison of four sequential 0.20 m walking actions kept the same policy,
+  filters, physics and settling between steps. Retaining the requested absolute heading reduced
+  final yaw error in two restarts: +11.42° to +4.43°, and −24.54° to −7.91°. Lateral offsets
+  were mixed: 3.47 to 7.02 cm in the first restart, 11.97 to 6.35 cm in the second. No obstacle
+  contacts or falls occurred. The RL checkout's ignored `artifacts/navigation/sequential-heading-*`
+  scripts and traces support testing heading retention, not a claim of straighter safe paths.
+- Zero-heading actions now retain the last requested heading; nonzero actions set a target
+  relative to current measured yaw. The course is exposed to both visual modes and cleared
+  after stops, action failures, reinitialization or unexpected movement. Corrections beyond
+  ±30° are refused. Tests cover chained corrections, explicit retargeting, angle wrap, resets,
+  cancellation, guard precedence, and observer failures during active motion. The independent
+  review found and helped fix an observer path that could otherwise erase an active target.
+- Actual daemon/MuJoCo calibration `runs/20260917T000550Z-7d5e3e20` used three consecutive
+  0.20 m/zero-heading commands without resetting the course. Independent distances were
+  0.1986, 0.1986 and 0.2046 m; net displacement was 0.6018 m with +1.255° total heading change.
+  All actions settled and odometry agreed with independent measurements. The exact truth
+  interval contained 103 samples with no obstacle contacts or falls and a maximum gap of
+  0.105 s (`course-calibration-001.truth.jsonl`). The run's `independent-calibration-summary.json`
+  contains the selected-truth hash and intervals. This is one successful sequence, not proof of
+  reliable path tracking; requested corrections were small in this trial.
+- `scripts/calibrate_navigation.py --steps 3 --distance 0.2 --heading 0` repeats this local
+  simulator-only calibration, with independent truth kept out of the executor. It stops the
+  sequence on an action, guard, settling, stop, or scoring failure and retains the single-arc
+  output fields. All 540 Python tests plus 18 subtests and Ruff passed after integration.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

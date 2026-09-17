@@ -28,6 +28,7 @@ CONTEXT_KEYS = frozenset(
         "arrival_claims",
         "camera",
         "progress_budget",
+        "course",
     }
 )
 CAMERA_KEYS = frozenset(
@@ -54,8 +55,11 @@ with the current ready state and depth when deciding the next action.
 Current camera metadata describes the measured optical direction in the trunk frame:
 yaw_deg is positive left, pitch_deg is positive up. The image center may point sideways.
 An unknown current camera direction is explicitly null; do not infer it from a prior view.
-advance heading_deg is relative to the BODY, not the camera: straight ahead does not mean
-toward the center of a sideways camera image. Compare labeled scans to understand directions.
+Nonzero advance heading_deg is relative to the BODY, not the camera: steering does not mean
+toward the center of a sideways camera image. Zero continues the last requested travel heading
+and may curve to correct drift. Read course for the retained target, current error and resets.
+With no active course, zero captures the current body heading. Compare labeled scans to
+understand directions. Every step still needs clearance for its actual corrective arc.
 Prior scans never override the current ready state or current depth. Recentring the head
 does not clear a physical obstacle. When front is blocked, compare scans for an alternative;
 do not repeat looks or recenter commands hoping a wall will clear.
