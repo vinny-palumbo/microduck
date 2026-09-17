@@ -292,6 +292,12 @@ Current integration evidence:
   clearly open corridor travel retains the existing course through zero-heading advances.
   This addresses 015's repeated retargeting and side-room inspections as a hypothesis for
   the next full trial. All 713 tests plus 18 subtests and Ruff passed after integration.
+- Trial `runs/20260917T010617Z-556c0d58` followed the corridor, investigated the tiled room
+  and approached the kitchen doorway, but again stopped short at its near left jamb. The
+  model correctly ended blocked without claiming entry. Exact scoring of
+  `voice-mission-016.truth.jsonl` found 1.461 m net movement over 250.4 s, valid coverage across
+  2,504 samples, zero obstacle contacts or falls, and no arrival. Pixel targeting alone does
+  not establish a doorway approach path with enough clearance around the near jamb.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
