@@ -66,9 +66,10 @@ async def test_arc_reports_settled_motion_and_holds_lock_during_settling(pair):
     assert max(abs(p[1]["vyaw"]) for p in transport.pulses) <= 0.5
 
 
-async def test_cancel_stops_arc_without_claiming_success(pair):
+@pytest.mark.parametrize("new_course", [False, True])
+async def test_cancel_stops_arc_without_claiming_success(pair, new_course):
     robot, transport = pair
-    action = asyncio.create_task(robot.advance(0.2))
+    action = asyncio.create_task(robot.advance(0.2, new_course=new_course))
     while not transport.moving_pulses():
         await asyncio.sleep(0.001)
     await robot.stop()
@@ -196,6 +197,48 @@ async def test_nonzero_heading_replaces_target_relative_to_current_pose(pair):
     assert second["target_yaw_deg"] == pytest.approx(current - 10)
     assert second["target_yaw_deg"] != pytest.approx(first["target_yaw_deg"] - 10)
     assert second["effective_heading_deg"] == pytest.approx(-10)
+
+
+async def test_new_course_zero_replaces_retained_target_with_current_heading(pair):
+    robot, transport = pair
+    first = await robot.advance(0.1, 20)
+    current_yaw = math.degrees(transport.state["odom"]["yaw"])
+    assert first["target_yaw_deg"] != pytest.approx(current_yaw)
+    start = len(transport.moving_pulses())
+    second = await robot.advance(0.1, 0, new_course=True)
+    assert second["completed"]
+    assert second["target_yaw_deg"] == pytest.approx(current_yaw)
+    assert second["effective_heading_deg"] == pytest.approx(0)
+    assert transport.moving_pulses()[start][1]["vyaw"] == pytest.approx(0)
+    assert second["course"]["target_yaw_deg"] == pytest.approx(current_yaw)
+
+
+@pytest.mark.parametrize("invalid", [None, 0, 1, "true", []])
+async def test_new_course_requires_bool_without_changing_retention_or_moving(pair, invalid):
+    robot, transport = pair
+    await robot.advance(0.1, 20)
+    before_course = robot.course()
+    before_pulses = len(transport.pulses)
+    with pytest.raises(TypeError, match="new_course must be boolean"):
+        await robot.advance(0.1, new_course=invalid)
+    assert robot.course() == before_course
+    assert len(transport.pulses) == before_pulses
+    assert not robot._active
+
+
+async def test_new_course_does_not_bypass_initial_obstacle_guard(pair):
+    robot, transport = pair
+    await robot.advance(0.1, 20)
+    before_motion = len(transport.moving_pulses())
+    transport.depth["distance_mm"] = [200] * 64
+    outcome = await robot.advance(0.1, 0, new_course=True)
+    assert not outcome["completed"]
+    assert outcome["reason"] == "obstacle"
+    assert outcome["target_yaw_deg"] is None
+    assert not outcome["course"]["active"]
+    assert outcome["course"]["reset_reason"] == "obstacle"
+    assert outcome["stop"]["acknowledged"]
+    assert len(transport.moving_pulses()) == before_motion
 
 
 async def test_course_wraps_across_pi_without_reversing_correction(pair):

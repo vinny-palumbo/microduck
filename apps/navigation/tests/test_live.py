@@ -1775,6 +1775,7 @@ def test_standard_mode_exposes_only_voice_goal_and_stop_tools():
         "observe",
         "look_at",
         "advance",
+        "advance_to_floor",
         "remember_place",
         "finish",
     }

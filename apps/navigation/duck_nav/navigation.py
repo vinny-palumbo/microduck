@@ -169,14 +169,18 @@ class GaitNavigator(GuardedRobot):
             await asyncio.sleep(self.config.pulse_period_s)
         return False, "settle_timeout"
 
-    async def advance(self, distance_m: float, heading_deg: float = 0):
+    async def advance(self, distance_m: float, heading_deg: float = 0, *, new_course: bool = False):
         """Walk a short arc, stop, and return measured displacement and heading.
 
         Zero continues the last requested heading; a nonzero heading establishes
-        a new target relative to measured current yaw. A positive heading curves left.
+        a new target relative to measured current yaw. Internal callers can set
+        new_course to establish a new relative target even when heading is zero.
+        A positive heading curves left.
         Clearance must include the whole arc;
         the forward depth sensor does not certify side or rear clearance.
         """
+        if type(new_course) is not bool:
+            raise TypeError("new_course must be boolean")
         distance, heading = _number(distance_m), _number(heading_deg)
         if not 0.05 <= distance <= self.gait.max_distance_m:
             raise ValueError(f"distance must be 0.05–{self.gait.max_distance_m} metres")
@@ -200,7 +204,7 @@ class GaitNavigator(GuardedRobot):
             else:
                 target_yaw = (
                     angle_delta(before["yaw"] + math.radians(heading), 0)
-                    if heading != 0 or self._course_target is None
+                    if new_course or heading != 0 or self._course_target is None
                     else self._course_target
                 )
                 desired = angle_delta(target_yaw, before["yaw"])

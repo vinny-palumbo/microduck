@@ -139,7 +139,7 @@ def test_stateless_payload_has_one_current_image_and_explicit_context():
     assert base64.b64decode(parts[2]["inlineData"]["data"]) == new
     assert "kitchen" not in parts[0]["text"]
     first["tools"][0]["functionDeclarations"].clear()
-    assert len(model.declarations) == 5
+    assert len(model.declarations) == len(ALLOWED_TOOLS)
 
 
 @pytest.mark.parametrize("reverse_prior_order", [False, True])
@@ -373,6 +373,42 @@ def test_runtime_retains_numeric_bound_enforcement():
     # Parsing validates the wire contract; the guarded executor owns action limits.
     args = {"distance_m": 0.3, "reason": "Runtime must reject this distance."}
     assert planner().parse(response(args=args))["args"] == args
+
+
+@pytest.mark.parametrize("opposite", [None, [600, 900]])
+def test_floor_target_points_parse(opposite):
+    args = {
+        "view_id": "view-00012",
+        "point": [750, 200],
+        "max_distance_m": 0.1,
+        "reason": "Visible floor through the doorway",
+    }
+    if opposite is not None:
+        args["opposite_point"] = opposite
+    assert planner().parse(response("advance_to_floor", args))["args"] == args
+
+
+@pytest.mark.parametrize("field", ["point", "opposite_point"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        "500,500",
+        [500],
+        [500, 500, 500],
+        [True, 500],
+        [float("nan"), 500],
+        [10**1000, 500],
+        [-1, 500],
+        [500, 1001],
+        ["500", 500],
+    ],
+)
+def test_floor_target_points_reject_invalid_coordinates(field, bad):
+    args = {"view_id": "view-1", "point": [500, 500], "max_distance_m": 0.1, "reason": "Floor"}
+    args[field] = bad
+    with pytest.raises(ValueError, match="invalid Gemini visual planning decision"):
+        planner().parse(response("advance_to_floor", args))
 
 
 @pytest.mark.parametrize(

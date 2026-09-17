@@ -154,6 +154,7 @@ goals and cancellation. Both use the same stop mechanism.
 | `observe()` | Read current camera/sensor readiness, depth summary, and robot odometry. |
 | `look_at(x, y, z)` | Aim the camera toward a trunk-frame point in metres: x forward, y left, z up. |
 | `advance(distance_m, heading_deg=0)` | Walk a short arc, stop, and check settling. Zero holds the requested course; nonzero changes it relative to the current body heading, positive left. |
+| `advance_to_floor(view_id, point, max_distance_m, opposite_point?)` | Standard mode: project a visible floor point, or two doorway floor endpoints, from a supplied image; walk at most 0.10 m toward the metric target. |
 | `remember_place(name, observation, explored)` | Retain visual observations and explored places in the current mission. |
 | `say(message)` | Display a brief update and optionally play local TTS. |
 | `stop()` | Cancel the mission and request that the duck stand still. |
@@ -171,6 +172,22 @@ results distinguish the supplied heading from the effective correction. A stop, 
 reinitialization, or unexpected movement clears the retained target. A correction beyond ±30°
 is refused. The planner still needs room for the whole corrective arc; holding a heading does
 not guarantee a straight path or an exact final pose.
+
+Floor targeting uses normalized `[y,x]` image coordinates from a specific supplied view.
+For doorway alignment, both endpoints are projected separately before their midpoint is
+computed in metres; averaging pixels would bias the target through perspective. The tool
+sets a fresh course even for a zero bearing, caps each arc at ±30° and 0.10 m, and retains
+all existing guards. It does not promise to reach the selected point or establish arrival.
+The head must be recentered before walking; a supplied recent side image can still provide
+the target using its original camera pose. Expired, moving, unsupported or inconsistent
+views are refused without movement and count toward the observation budget.
+
+Projection assumes level supported floor and requires matching stopped camera/body captures.
+It uses raw intrinsics, image rotation, measured camera pose, gravity, and odometry height.
+Exact simulator calibration is supported; physical calibration currently requires an explicit
+zero-distortion model. Nonzero lens distortion is refused. Receive-time matching does not
+prove capture-time synchronization. Image pointing and floor-plane assumptions can be wrong;
+this supplies a coarse steering target, not obstacle clearance or a precise body-fit test.
 
 Depth observations include left, center, and right sectors in the robot's trunk frame, plus the
 sensor's current yaw. Side scans report what the sensor sees while keeping forward movement

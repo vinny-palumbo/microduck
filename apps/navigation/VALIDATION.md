@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 540 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 692 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -250,6 +250,28 @@ Current integration evidence:
   The final left scan retained the close jamb after recentering. The doorway prompt therefore
   did not solve approach alignment in this full trial; merely describing the near threshold
   is insufficient evidence that the selected turn angles lead through its center.
+- Recorded image-pointing probes found plausible visible jamb contacts and withheld points
+  when the other jamb was outside the current image. The useful left scan from 013 produced
+  endpoints `[598,325]` and `[480,960]` in normalized `[y,x]` coordinates. Independent offline
+  projection placed them about 2.5 cm from the visible floor-seam endpoints, but 5–9 cm behind
+  the near wall face. Averaging separately projected endpoints was 1.3 cm from the seam center;
+  projecting the model's image midpoint was 7.0 cm away. A 5-pixel perturbation moved a projected
+  point by up to 9.4 cm. The ignored `doorway-pointing-probe/floor-projection-validation.json`
+  retains hashes, exact sensor inputs and comparison limits. Geometry and simulator truth
+  were consulted only after model inference, for evaluation; the model saw images and camera
+  labels only. Two initial responses failed validation without retained diagnostic details
+  and are unusable evidence; two subsequent retries passed the unchanged validator.
+- `advance_to_floor` now binds model-selected `[y,x]` points to the exact current/prior JPEGs
+  supplied for that decision. It projects stored camera geometry onto level floor and can
+  average two projected doorway endpoints. It establishes a new course, caps each step at
+  0.10 m/±30°, and uses the existing guarded advance, recovery and cancellation paths.
+  Stored captures must agree on stopped camera/body pose; stale views, moved/tilted bodies,
+  unsupported calibration, nonzero distortion and invalid geometry are refused without motion.
+  Refusals consume the observation budget. Projection is a coarse steering hypothesis and
+  does not establish support, clearance, body fit or arrival. Receive-time matching remains
+  distinct from capture synchronization. Exact planning context is now recorded with its JPEGs
+  so subsequent decision replays need not reconstruct it from an earlier observation.
+  All 692 Python tests plus 18 subtests, Ruff check and formatting passed before the live trial.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

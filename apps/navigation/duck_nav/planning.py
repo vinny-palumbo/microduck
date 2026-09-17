@@ -11,7 +11,9 @@ import math
 import aiohttp
 from PIL import Image, UnidentifiedImageError
 
-ALLOWED_TOOLS = frozenset({"observe", "look_at", "advance", "remember_place", "finish"})
+ALLOWED_TOOLS = frozenset(
+    {"observe", "look_at", "advance", "advance_to_floor", "remember_place", "finish"}
+)
 CONTEXT_KEYS = frozenset(
     {
         "goal",
@@ -111,6 +113,21 @@ floor until a short walking arc can cross the near threshold centrally. Plan the
 forward translation before its turn, including the actual course error; it is not a pivot.
 If the near threshold and both jamb margins are not established by the available views,
 inspect them before committing to entry. Reassess that near-floor passage after each arc.
+
+For steering toward visible floor, prefer advance_to_floor over estimating an angle.
+Select point=[y,x], normalized 0–1000, in one exact supplied image identified by view_id.
+For a doorway, provide point and opposite_point at the TWO visible near-jamb floor
+contacts in that same image. The bridge projects each endpoint into metres and aims
+midway between them; an image-space midpoint is biased by perspective. For an approach,
+provide a single clear intermediate floor point. Do not point at an appliance,
+wall, unknown surface, or infer a point outside the image. Recenter the head before
+calling it; you may select a still-supplied side-scan image after recentering. The bridge
+uses that captured camera pose and floor geometry to establish a NEW course toward the
+point, including for zero bearing. It walks at most 0.10 m and turns at most 30 degrees
+per arc. A far-side point therefore does not cause an in-place turn or immediate entry.
+Inspect the fresh view after each arc. Projection assumes level supported floor and does
+not establish clearance, body fit, or arrival; judge the whole actual arc visually and
+obey depth guards. If the point cannot be projected, inspect or choose another action.
 
 Only advance when ready is true. Treat local guards as authoritative. A null depth return
 is not certified clearance; consider known zones, floor returns, and visible obstacles.
@@ -336,6 +353,20 @@ class GeminiVisualPlanner:
             elif kind == "string":
                 limit = min(field.get("maxLength", 2000), 1000 if key == "reason" else 2000)
                 valid = isinstance(value, str) and bool(value.strip()) and len(value) <= limit
+            elif kind == "array" and key in {"point", "opposite_point"}:
+                try:
+                    valid = (
+                        isinstance(value, list)
+                        and len(value) == 2
+                        and all(
+                            type(coordinate) in (int, float)
+                            and math.isfinite(coordinate)
+                            and 0 <= coordinate <= 1000
+                            for coordinate in value
+                        )
+                    )
+                except OverflowError:
+                    valid = False
             else:
                 valid = False
             if not valid or ("enum" in field and value not in field["enum"]):
