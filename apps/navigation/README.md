@@ -4,7 +4,9 @@
 
 The [`duck-voice` workflow](../../docs/robot/voice-guided-navigation.md) owns setup and usage for
 spoken destination instructions, a persistent camera/audio session, and the `advance` walking
-tool; the tools below are the earlier guarded visual-agent prototype.
+tool. Its [observed doorway reference](../../docs/robot/voice-guided-navigation.md#observed-doorway-reference)
+uses paired image points to stage an approach and `follow_gap()` for individual guarded steps.
+The tools below are the earlier guarded visual-agent prototype.
 
 ## Legacy guarded visual-agent prototype
 

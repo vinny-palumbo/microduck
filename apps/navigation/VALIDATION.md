@@ -298,6 +298,28 @@ Current integration evidence:
   `voice-mission-016.truth.jsonl` found 1.461 m net movement over 250.4 s, valid coverage across
   2,504 samples, zero obstacle contacts or falls, and no arrival. Pixel targeting alone does
   not establish a doorway approach path with enough clearance around the near jamb.
+- Two additional, independent ER 2 pointing calls used only the exact current JPEG and measured
+  camera label from 016 view37 and 013 view32, with the unchanged narrow annotation prompt.
+  No proposed coordinates, action history, odometry, expected answer, or simulator data entered
+  either request. Both returned schema-valid reports in 6.21 s and 7.37 s. The 016 pair
+  `[560,478]` / `[492,938]` projected to a 0.731 m gap, center `(-0.998,1.978)` and outward normal
+  4.56° in recorded odometry coordinates. The 013 pair `[600,325]` / `[480,960]` projected to
+  0.781 m, center `(-1.004,2.003)` and normal 3.26°. Visual inspection placed both left points
+  roughly 7–10 pixels above the nearest gray jamb corner, closer to the farther floor seam;
+  the second image's right boundary remained ambiguous near its edge. These two samples showed
+  no clear improvement over the main planner's contact accuracy. They did not compare against
+  simulator truth or execute motion. Exact prompts, schemas, payloads, images, capture geometry,
+  hashes, sanitized responses and visual assessments are in the ignored recording
+  `runs/20260917T010617Z-556c0d58/independent-doorway-grounding/results.json`.
+- Paired floor targets now create a retained local doorway reference with a curved approach to
+  a staging pose, followed by perpendicular crossing. `follow_gap()` requests one guarded step
+  after each fresh view. The inferred width must exceed 0.74 m; a 0.37 m reference-geometry
+  margin does not change the actual 0.35 m depth guard. The reference is limited to 4 m and
+  240 seconds, with measured progress, pose-change and tracking checks. Its initial side is
+  defined by the robot, not by semantic room identity. Sampled curvature and inferred wall
+  clearance do not prove gait tracking or obstacle-free space. This is an implementation to
+  test, not evidence of successful doorway entry; see the
+  [current contract](../../docs/robot/voice-guided-navigation.md#observed-doorway-reference).
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

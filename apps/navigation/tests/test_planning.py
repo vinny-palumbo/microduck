@@ -188,6 +188,63 @@ def test_live_declarations_convert_to_filtered_http_tools():
     assert set(config["allowedFunctionNames"]) == ALLOWED_TOOLS
 
 
+def test_follow_gap_wire_schema_has_no_arguments():
+    tools = planner().payload(context(), JPEG)["tools"][0]["functionDeclarations"]
+    tool = next(tool for tool in tools if tool["name"] == "follow_gap")
+    assert tool["parametersJsonSchema"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+    assert planner().parse(response("follow_gap", {})) == {"name": "follow_gap", "args": {}}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"reason": "Continue the approach."},
+        {"heading_deg": 0},
+        {"distance_m": 0.1},
+        {"point": [500, 500]},
+        {"override_guard": True},
+        None,
+        [],
+        "{}",
+    ],
+)
+def test_follow_gap_rejects_arguments_and_non_object_calls(args):
+    data = response("follow_gap", {})
+    data["candidates"][0]["content"]["parts"][0]["functionCall"]["args"] = args
+    with pytest.raises(ValueError, match="invalid Gemini visual planning decision"):
+        planner().parse(data)
+
+
+@pytest.mark.parametrize(
+    "gap_plan",
+    [
+        None,
+        {
+            "status": "active",
+            "phase": "approach",
+            "remaining_m": 0.8,
+            "progress_m": 0.1,
+            "total_length_m": 0.9,
+            "doorway_width_m": 0.85,
+            "source_view_id": "view-00037",
+            "target_heading_deg": 140.0,
+            "source": "observed_doorway_projection",
+        },
+    ],
+)
+def test_observed_gap_plan_is_passed_without_replacing_goal_or_current_guard(gap_plan):
+    current = context(gap_plan=gap_plan, ready=False, guard_reason="head_not_forward")
+    original = copy.deepcopy(current)
+    parts = planner().payload(current, JPEG)["contents"][0]["parts"]
+    assert json.loads(parts[0]["text"]) == original
+    assert current == original
+
+
 def test_stateless_payload_has_one_current_image_and_explicit_context():
     model = planner()
     old, new = jpeg("red"), jpeg("blue")
@@ -354,10 +411,13 @@ def test_unknown_context_is_rejected(extra):
         planner().payload(context(**{extra: "do not send"}), JPEG)
 
 
-@pytest.mark.parametrize("key", ["simulator_truth", "ground_truth", "qpos", "qvel"])
-def test_nested_raw_truth_is_rejected(key):
+@pytest.mark.parametrize(
+    "key", ["simulator_truth", "simulator_ground_truth", "ground_truth", "qpos", "qvel"]
+)
+@pytest.mark.parametrize("field", ["recent_actions", "gap_plan"])
+def test_nested_raw_truth_is_rejected(key, field):
     with pytest.raises(ValueError, match="simulator truth is forbidden"):
-        planner().payload(context(recent_actions=[{"result": {key: [1, 2, 3]}}]), JPEG)
+        planner().payload(context(**{field: [{"result": {key: [1, 2, 3]}}]}), JPEG)
 
 
 def test_tuple_cannot_hide_serializable_truth():

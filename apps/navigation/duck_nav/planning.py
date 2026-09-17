@@ -15,7 +15,7 @@ VISUAL_MODELS = ("gemini-robotics-er-2-preview", "gemini-3.8-flash")
 DEFAULT_VISUAL_MODEL = VISUAL_MODELS[0]
 
 ALLOWED_TOOLS = frozenset(
-    {"observe", "look_at", "advance", "advance_to_floor", "remember_place", "finish"}
+    {"observe", "look_at", "advance", "advance_to_floor", "follow_gap", "remember_place", "finish"}
 )
 CONTEXT_KEYS = frozenset(
     {
@@ -34,6 +34,7 @@ CONTEXT_KEYS = frozenset(
         "camera",
         "progress_budget",
         "course",
+        "gap_plan",
     }
 )
 CAMERA_KEYS = frozenset(
@@ -108,8 +109,8 @@ advance is a short walking arc, not an in-place turn. Use about 0.10 m arcs to a
 opening, reassess the actual measured heading, and reserve 0.20 m for visibly open straight
 space. Allow clearance throughout the swept arc; a requested heading is not guaranteed.
 
-For doorway entry, first navigate toward the center of the NEAR floor threshold
-between the two jambs, leaving margin from BOTH jambs. Do not aim toward an appliance or
+For doorway entry, first establish the NEAR physical jamb-floor contacts on BOTH sides
+and an approach that leaves margin from both jambs. Do not aim toward an appliance or
 back wall seen through the doorway: that diagonal line can cross the near jamb even when
 the destination itself is visible. While alongside a corridor, approach along its clear
 floor until a short walking arc can cross the near threshold centrally. Plan the arc's
@@ -126,18 +127,32 @@ Use advance_to_floor when an actual change of route or doorway alignment is need
 instead of estimating its angle. Inspect and identify the route before selecting its floor.
 Select point=[y,x], normalized 0–1000, in one exact supplied image identified by view_id.
 For a doorway, provide point and opposite_point at the TWO visible near-jamb floor
-contacts in that same image. The bridge projects each endpoint into metres and aims
-midway between them; an image-space midpoint is biased by perspective. For an approach,
-provide a single clear intermediate floor point. Do not point at an appliance,
-wall, unknown surface, or infer a point outside the image. Recenter the head before
-calling it; you may select a still-supplied side-scan image after recentering. The bridge
-uses that captured camera pose and floor geometry to establish a NEW course toward the
-point, including for zero bearing. It requests at most 0.10 m and 30 degrees per arc;
-the actual gait can overshoot, so use measured outcomes and leave settling margin.
-A far-side point therefore does not cause an in-place turn or immediate entry.
-Inspect the fresh view after each arc. Projection assumes level supported floor and does
-not establish clearance, body fit, or arrival; judge the whole actual arc visually and
-obey depth guards. If the point cannot be projected, inspect or choose another action.
+contacts in that same image. Select the nearest physical jamb bases, not a floor-color
+seam farther through the opening or a point partway up a wall. The bridge projects both
+endpoints into metres and creates a local curved approach to a staging pose before
+crossing perpendicular to the threshold; it does not steer directly at an image midpoint.
+Geometry that is too narrow or cannot support this approach may be refused.
+For another route change, a single clear intermediate floor point establishes a NEW course
+toward that point, including for zero bearing. Do not point at an appliance, wall, unknown
+surface, or infer a point outside the image. Recenter the head before calling it; you may
+select a still-supplied side-scan image after recentering. Each call requests at most
+0.10 m and 30 degrees per arc; the actual gait can overshoot, so use measured outcomes and
+leave settling margin. A far-side point does not cause an in-place turn or immediate entry.
+
+Read gap_plan for the retained approach's status, phase, measured progress and remaining
+distance, doorway width, source view, and target heading. After a paired-point plan's first
+step, inspect each fresh image and the current depth, then call follow_gap() with NO
+arguments for one further bounded step when that approach remains visibly safe and ready
+is true. Head scans are allowed; recenter before following. Any non-gap body movement
+abandons this plan, and a failed step stops and invalidates it. Do not replace an active
+plan with newly guessed points or manual headings merely to continue the same approach.
+The plan is a local reference derived from observed endpoints, not proof of an obstacle-free
+path, body fit, or arrival. Projection assumes level supported floor. Judge the whole actual
+arc visually, obey current depth guards, and reassess the approach after every step.
+If doorway geometry is refused, do not switch to manual advance or a single point to
+squeeze through that same gap. Inspect another view to resolve the geometry, choose a
+different route, or finish blocked when no safe option remains. Never move to bypass a
+projection or path-feasibility refusal.
 
 Only advance when ready is true. Treat local guards as authoritative. A null depth return
 is not certified clearance; consider known zones, floor returns, and visible obstacles.

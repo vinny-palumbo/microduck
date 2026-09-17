@@ -163,7 +163,8 @@ goals and cancellation. Both use the same stop mechanism.
 | `observe()` | Read current camera/sensor readiness, depth summary, and robot odometry. |
 | `look_at(x, y, z)` | Aim the camera toward a trunk-frame point in metres: x forward, y left, z up. |
 | `advance(distance_m, heading_deg=0)` | Walk a short arc, stop, and check settling. Zero holds the requested course; nonzero changes it relative to the current body heading, positive left. |
-| `advance_to_floor(view_id, point, max_distance_m, opposite_point?)` | Standard mode: project a visible floor point, or two doorway floor endpoints, from a supplied image; walk at most 0.10 m toward the metric target. |
+| `advance_to_floor(view_id, point, max_distance_m, opposite_point?)` | Standard mode: project a visible floor point, or create a staged doorway reference from two jamb-floor contacts, and take one guarded step of at most 0.10 m. |
+| `follow_gap()` | Standard mode: take one guarded step along the retained doorway reference after inspecting the fresh view; accepts no arguments. |
 | `remember_place(name, observation, explored)` | Retain visual observations and explored places in the current mission. |
 | `say(message)` | Display a brief update and optionally play local TTS. |
 | `stop()` | Cancel the mission and request that the duck stand still. |
@@ -182,22 +183,69 @@ reinitialization, or unexpected movement clears the retained target. A correctio
 is refused. The planner still needs room for the whole corrective arc; holding a heading does
 not guarantee a straight path or an exact final pose.
 
+### Observed doorway reference
+
 Floor targeting uses normalized `[y,x]` image coordinates from a specific supplied view.
-For doorway alignment, both endpoints are projected separately before their midpoint is
-computed in metres; averaging pixels would bias the target through perspective. The tool
-sets a fresh course even for a zero bearing, caps each requested arc at ±30° and 0.10 m, and retains
-all existing guards. It does not promise to reach the selected point or establish arrival.
-Actual motion can overshoot during driving or settling, so each result reports measured progress.
-The head must be recentered before walking; a supplied recent side image can still provide
-the target using its original camera pose. Expired, moving, unsupported or inconsistent
-views are refused without movement and count toward the observation budget.
+A single visible floor point establishes a fresh course, including for zero bearing. With
+`opposite_point`, both points must identify the nearest physical jamb-floor contacts in that
+same image. A floor-color seam farther through the opening or a point up a wall is insufficient.
+The endpoints are projected separately into metres; averaging pixels would bias their center
+through perspective. The head must be recentered before walking; a supplied recent side image
+can still provide points using its original camera pose. Expired, moving, unsupported or
+inconsistent views are refused without movement and count toward the observation budget.
+
+An accepted pair creates a local reference in measured odometry coordinates: forward curves
+and straight segments first reach a staging pose, then cross perpendicular to the inferred
+doorway plane. The first call takes one step; each later `follow_gap()` takes at most another
+0.10 m with a requested heading within ±30°. The planner receives a fresh image, current depth,
+and `gap_plan` status, phase, progress, remaining length, doorway width, source view and target
+heading before deciding whether to continue. Head scans can retain the plan, but the head must
+be recentered before movement. The reference persists through its own settled steps even though
+the original image is no longer a selectable stationary view.
+
+The initial body side defines the approach side. The two endpoints alone cannot identify a
+semantic room interior or prove the destination is beyond the gap. The reference finishes
+0.35 m beyond its inferred plane; completing it does not establish full-body arrival. The
+separate visual arrival review is still required.
+
+| Reference or tracking limit | Current value |
+|---|---|
+| Projected opening width | Strictly greater than 0.74 m and at most 3 m |
+| Reference clearance from the two inferred wall strips and endpoints | 0.37 m; the strips assume 0.03 m half-thickness |
+| Candidate curve radii / staging distances before the plane | 0.35, 0.45, 0.60 m / 0.40, 0.60, 0.80, 1.00 m |
+| Reference length / retained lifetime | At most 4 m / 240 seconds |
+| Reference sample spacing / lookahead | At most 0.02 m / 0.20 m |
+| Tracking refusal | More than 0.10 m from the reference or 60° from its tangent |
+| Monotonic progress association | At most 0.30 m ahead per tracking update |
+| Unexpected pose change between steps | More than 0.025 m or 5° from the last measured settled pose |
+| Reference completion | Within 0.06 m and 10° of the final pose, with corresponding path progress |
+
+The 0.37 m margin applies to inferred reference geometry. The actual depth guard remains
+0.35 m, and the helper also checks current inferred-wall clearance and crossing alignment
+against 0.35 m. These are different checks; neither certifies clearance for every body part.
+Reference segments are sampled and checked against inferred walls with a curved-segment
+deviation allowance. They do not account for unseen obstacles, uncertain endpoint locations,
+or the gait's ability to track that curvature. Progress and deviations are checked again using
+the measured pose after each settled step; actual walking can overshoot or under-track.
+
+A new floor target or ordinary body movement abandons the previous reference. Expiry,
+unexpected movement, tracking or geometry refusal, failed or interrupted motion, failed gaze,
+stop, arrival review, and mission termination also clear it. A refusal requests a stop; the
+planner must inspect a fresh view, choose another route, or finish blocked. It is instructed
+not to replace a geometrically refused doorway pair with a manual arc or single point to
+squeeze through the same gap. This instruction does not add a global map or prove another
+route is safe.
 
 Projection assumes level supported floor and requires matching stopped camera/body captures.
 It uses raw intrinsics, image rotation, measured camera pose, gravity, and odometry height.
 Exact simulator calibration is supported; physical calibration currently requires an explicit
 zero-distortion model. Nonzero lens distortion is refused. Receive-time matching does not
 prove capture-time synchronization. Image pointing and floor-plane assumptions can be wrong;
-this supplies a coarse steering target, not obstacle clearance or a precise body-fit test.
+recorded probes confused near jamb corners with farther floor seams. The reference supplies a
+local approach hypothesis, not obstacle clearance or a precise body-fit test. Its full execution
+through a doorway has not yet been validated.
+
+### Local observations and mission limits
 
 Depth observations include left, center, and right sectors in the robot's trunk frame, plus the
 sensor's current yaw. Side scans report what the sensor sees while keeping forward movement
