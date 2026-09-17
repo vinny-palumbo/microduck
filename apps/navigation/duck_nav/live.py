@@ -869,6 +869,7 @@ class LiveMission:
             self.record(
                 "visual_views_selected",
                 step=step,
+                context=copy.deepcopy(context),
                 current={"camera": context["camera"], "image_path": observation["image_path"]},
                 previous=references,
             )

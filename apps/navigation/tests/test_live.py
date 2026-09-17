@@ -1193,6 +1193,7 @@ async def test_standard_planner_compares_scans_at_same_pose_and_drops_them_after
         json.loads(line) for line in (recorder.path / "events.jsonl").read_text().splitlines()
     ]
     selected = [event for event in events if event["event"] == "visual_views_selected"]
+    assert [event["context"] for event in selected] == planner.contexts
     for event, image, views in zip(selected, planner.images, planner.views, strict=True):
         assert Path(event["current"]["image_path"]).read_bytes() == image
         assert all(
