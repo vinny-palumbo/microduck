@@ -403,6 +403,17 @@ Current integration evidence:
   All 1,170 Python tests plus 18 subtests pass, including 242 live integration tests; Ruff and
   formatting checks pass. The new cases also preserve cancellation and fatal-guard precedence.
   Full physical arrival remains unproven until the revised behavior completes a scored run.
+- The next spoken trial could not start: recordings `20260917T023540Z-c6decd91` and
+  `20260917T023628Z-87b77d46` both failed while opening the voice session, before a live
+  navigation mission began. Subsequent robot-free handshakes using the normal configuration
+  and a minimal text-response configuration both closed with WebSocket code 1011. No provider
+  response bodies were logged, and these setup failures do not establish a specific service
+  cause. The simulator was stopped; `voice-mission-020.truth.jsonl` contains setup/idle evidence
+  only and is not a completed or scored navigation trial.
+- CLI setup failures now expose a bounded numeric HTTP/WebSocket code while continuing to
+  suppress provider text. Twenty-six additional CLI tests pass for valid codes, enum values,
+  rejected custom conversions, failed attribute access, redaction and exit status. Motion,
+  retry policy, voice configuration and credentials are unchanged.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

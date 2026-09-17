@@ -346,6 +346,9 @@ The recording also identifies the visual planning model so runs from the two mod
 Exit 0 means that visual assessment; exit 2 means a blocked, cancelled, or failed mission; exit 1
 means setup failure; and Ctrl-C exits 130. Interpret stop acknowledgements using the
 [guard contract](../../apps/navigation/README.md#guard-contract).
+Setup errors include a bounded numeric HTTP or WebSocket `protocol_code` when available;
+provider response bodies and credentials remain hidden. A code alone does not establish
+the specific service or configuration cause.
 
 After the mission ends, score the independent simulator log from the first terminal:
 

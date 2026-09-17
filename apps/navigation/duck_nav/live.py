@@ -12,6 +12,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 
 from PIL import Image
@@ -2045,14 +2046,31 @@ def parser():
     return result
 
 
+def _protocol_code(error):
+    """Keep only a bounded numeric status, without formatting provider values."""
+    try:
+        value = error.code
+    except Exception:  # noqa: BLE001 - even a failing provider property must stay redacted
+        return None
+    if type(value) is not int and not isinstance(value, IntEnum):
+        return None
+    # Call the builtin directly so IntEnum conversion/format overrides cannot
+    # supply arbitrary text or alter the value used in the range checks.
+    value = int.__int__(value)
+    return value if 100 <= value <= 599 or 1000 <= value <= 4999 else None
+
+
 def main():
     try:
         code = asyncio.run(run(parser().parse_args()))
     except KeyboardInterrupt:
         code = 130
     except Exception as error:  # noqa: BLE001 - suppress provider bodies that may contain credentials
+        protocol_code = _protocol_code(error)
+        status = f" (protocol_code={protocol_code})" if protocol_code is not None else ""
         print(
-            f"{type(error).__name__}: voice session could not run; check connection/configuration",
+            f"{type(error).__name__}{status}: voice session could not run; "
+            "check connection/configuration",
             file=sys.stderr,
         )
         code = 1
