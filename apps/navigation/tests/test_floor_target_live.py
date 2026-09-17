@@ -53,6 +53,16 @@ class FloorRobot(Robot):
         return await super().advance(distance_m, heading_deg)
 
 
+class ApprovingGapReviewer:
+    async def review(self, jpeg, *, camera, point, opposite_point):
+        return {
+            "doorway_visible": True,
+            "both_contacts_visible": True,
+            "points_match_contacts": True,
+            "evidence": "Fixture shows the two selected jamb-floor contacts.",
+        }
+
+
 @pytest.fixture(autouse=True)
 def fast_images(monkeypatch):
     original = LiveMission.image
@@ -77,6 +87,7 @@ def mission(tmp_path, robot=None):
         speak=None,
         emit=lambda _: None,
         navigation_planner=VisualPlanner([]),
+        gap_reviewer=ApprovingGapReviewer(),
     )
 
 

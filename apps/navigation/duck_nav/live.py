@@ -488,6 +488,7 @@ class LiveMission:
         emit,
         arrival_reviewer=None,
         navigation_planner=None,
+        gap_reviewer=None,
     ):
         self.robot, self.transport, self.session, self.recorder = (
             robot,
@@ -519,6 +520,7 @@ class LiveMission:
         self.recoverable_failures = 0
         self.recovery = None
         self.arrival_reviewer = arrival_reviewer
+        self.gap_reviewer = gap_reviewer
         self.arrival_claims = 0
         self.navigation_planner = navigation_planner
         self.stationary_views = StationaryViews(recorder)
@@ -1083,6 +1085,22 @@ class LiveMission:
             self.gap_summary = summary
         self.record("gap_step_measured", step=step, gap_plan=self.gap_summary)
 
+    async def floor_fatal_guard(self, guard_reason):
+        self.clear_gap("fatal_guard")
+        stopped = await self.robot.stop()
+        self.result.update(
+            status="blocked", reason=f"Floor targeting stopped by guard: {guard_reason}"
+        )
+        return {
+            "tool": "advance_to_floor",
+            "result": {
+                "completed": False,
+                "reason": guard_reason,
+                "fatal_guard": True,
+                "stop": stopped,
+            },
+        }
+
     async def advance_to_floor(self, args):
         """Resolve one supplied pixel, then share the existing guarded advance lifecycle."""
         required = {"view_id", "point", "max_distance_m", "reason"}
@@ -1106,22 +1124,10 @@ class LiveMission:
         observation = await self.robot.observe()
         guard_reason = observation["guard_reason"]
         if guard_reason is not None and guard_reason not in RECOVERABLE_GUARD_REASONS:
-            self.clear_gap("fatal_guard")
-            stopped = await self.robot.stop()
-            self.result.update(
-                status="blocked", reason=f"Floor targeting stopped by guard: {guard_reason}"
-            )
-            return {
-                "tool": "advance_to_floor",
-                "result": {
-                    "completed": False,
-                    "reason": guard_reason,
-                    "fatal_guard": True,
-                    "stop": stopped,
-                },
-            }
+            return await self.floor_fatal_guard(guard_reason)
         snapshot = self.transport.snapshot()
         self.clear_gap("new_floor_target")
+        gap_review = None
         try:
             view = self.stationary_views.resolve(snapshot, view_id, self.supplied_view_ids)
             with Image.open(io.BytesIO(view["jpeg"])) as picture:
@@ -1140,6 +1146,48 @@ class LiveMission:
                 gap_width = math.dist(target, other_target)
                 reference = build_gap_path(position[:2], yaw, [target, other_target])
                 target = [(left + right) / 2 for left, right in zip(target, other_target)]
+                if self.gap_reviewer is None:
+                    raise ValueError("gap_review_unavailable")
+                self.record(
+                    "gap_review_started", view_id=view_id, point=point, opposite_point=opposite
+                )
+                gap_review = await asyncio.wait_for(
+                    self.gap_reviewer.review(
+                        view["jpeg"],
+                        camera={
+                            key: view["camera"][key]
+                            for key in ("view_id", "label", "yaw_deg", "pitch_deg")
+                        },
+                        point=point,
+                        opposite_point=opposite,
+                    ),
+                    self.config.model_timeout_s,
+                )
+                if self.done.is_set():
+                    raise asyncio.CancelledError
+                # A cloud review is an interpretation of a past image. It cannot
+                # extend its lifetime, permit movement, or erase a fresh fatal guard.
+                observation = await self.robot.observe()
+                guard_reason = observation["guard_reason"]
+                if guard_reason is not None and guard_reason not in RECOVERABLE_GUARD_REASONS:
+                    return await self.floor_fatal_guard(guard_reason)
+                accepted = all(
+                    gap_review.get(key) is True
+                    for key in ("doorway_visible", "both_contacts_visible", "points_match_contacts")
+                )
+                self.record(
+                    "gap_review_finished", view_id=view_id, accepted=accepted, review=gap_review
+                )
+                if not accepted:
+                    raise ValueError("gap_review_not_confirmed")
+                snapshot = self.transport.snapshot()
+                self.stationary_views.resolve(snapshot, view_id, self.supplied_view_ids)
+                move = snapshot["state"]["data"]["move"]
+                if any(v != 0 for v in _vector(move["requested"], 3)) or any(
+                    abs(v) >= 0.001 for v in _vector(move["applied"], 3)
+                ):
+                    raise ValueError("gap_review_robot_not_stopped")
+                position, yaw = self.stationary_views.pose(snapshot)
             dx, dy = target[0] - position[0], target[1] - position[1]
             remaining = math.hypot(dx, dy)
             bearing = _angle_delta_degrees(math.atan2(dy, dx), yaw)
@@ -1166,6 +1214,8 @@ class LiveMission:
                 ),
             }
             entry = {"tool": "advance_to_floor", "arguments": copy.deepcopy(args), "result": result}
+            if gap_review is not None:
+                entry["gap_review"] = copy.deepcopy(gap_review)
             self.history.append(entry)
             del self.history[:-8]
             self.record("floor_target_refused", **entry)
@@ -1187,6 +1237,8 @@ class LiveMission:
             "point_reached": False,
             "source": "model_selected_pixel_and_measured_geometry_not_clearance",
         }
+        if gap_review is not None:
+            target_evidence["gap_review"] = copy.deepcopy(gap_review)
         self.record("floor_target_resolved", **target_evidence)
         if reference is not None:
             self.gap_plan = {
@@ -1642,6 +1694,7 @@ async def run_live(
     emit=lambda event: None,
     arrival_reviewer=None,
     navigation_planner=None,
+    gap_reviewer=None,
 ):
     """Run against an already connected/initialized robot and a Live API session."""
     if goal is not None:
@@ -1660,6 +1713,7 @@ async def run_live(
         emit=emit,
         arrival_reviewer=arrival_reviewer,
         navigation_planner=navigation_planner,
+        gap_reviewer=gap_reviewer,
     ).run()
 
 
@@ -1686,6 +1740,7 @@ async def run(args):
     from google import genai
 
     from .arrival import GeminiArrivalReviewer
+    from .gap_review import GeminiGapReviewer
     from .planning import DEFAULT_VISUAL_MODEL, GeminiVisualPlanner
 
     if args.visual_planner == "streaming" and args.visual_model != DEFAULT_VISUAL_MODEL:
@@ -1739,6 +1794,7 @@ async def run(args):
                 emit=emit_console,
                 arrival_reviewer=GeminiArrivalReviewer(key),
                 navigation_planner=navigation_planner,
+                gap_reviewer=GeminiGapReviewer(key) if navigation_planner is not None else None,
             )
         return 0 if result["status"] == "goal_observed" else 2
     finally:

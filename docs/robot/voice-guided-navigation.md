@@ -203,7 +203,14 @@ inconsistent views are refused without movement and count toward the observation
 
 An accepted pair creates a local reference in measured odometry coordinates: forward curves
 and straight segments first reach a staging pose, then cross perpendicular to the inferred
-doorway plane. The first call takes one step; each later `follow_gap()` takes at most another
+doorway plane. Before its first movement, a separate visual reviewer receives only the exact
+source image, measured camera label and angles, and proposed points. It must identify a real
+opening, both visible near jamb-floor contacts, and agreement with the selected points.
+Missing or negative review refuses the pair. Three recorded probes rejected a corridor-wall
+proposal and a cropped opening but accepted a pair with a small floor-seam ambiguity: this
+review catches some semantic mistakes and does not certify endpoint precision. After the
+review, source age, body pose, stopped commands, and local guards are checked again.
+The first call takes one step; each later `follow_gap()` takes at most another
 0.10 m with a requested heading within ±30°. The planner receives a fresh image, current depth,
 and `gap_plan` status, phase, progress, remaining length, doorway width, source view and target
 heading before deciding whether to continue. Head scans can retain the plan, but the head must

@@ -9,7 +9,7 @@ prototype; they do not establish completion of the current voice-navigation obje
 
 Current integration evidence:
 
-- 713 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
+- 995 navigation Python tests (plus 18 subtests), Ruff, and 217 Rust tests passed. The checks include
   audio resampling/staleness/disconnection, live session tool sequencing, voice cancellation,
   guard failures during motion/settling, and action-lock cleanup after broken telemetry.
 - The actual `gemini-robotics-er-2-streaming-preview` endpoint accepted the declared tools and
@@ -332,6 +332,34 @@ Current integration evidence:
   across 1,400 samples, zero obstacle contacts or falls, and no physical or claimed arrival.
   Final stop was acknowledged and the independent final sample was stopped; the final stop
   acknowledgement itself did not verify physical settling.
+- Trial `runs/20260917T014258Z-f579a09f` stopped blocked on repeated guarded refusals after
+  50 calls: one accepted voice goal and 49 valid visual decisions. Three `MAX_TOKENS` replies
+  at steps 21, 30 and 47 were rejected and recovered by the bounded retry, giving 52 visual
+  requests in total. Exact scoring of `voice-mission-018.truth.jsonl`, saved in the run's
+  `independent-score.json`, found 1.8548 m net displacement over 431.308 s, valid coverage
+  across 4,313 samples with a maximum gap of 0.116 s, zero obstacle contacts or falls, and no
+  physical or claimed arrival. The final independent sample was upright and stopped, and
+  final stop was acknowledged.
+- This trial created one gap reference and recorded 11 requested path steps and ten measured
+  path steps. Steps 30–39 completed 0.971 m of summed action displacement and advanced the
+  reference by 0.986 m of its 2.473 m length. Maximum measured cross-track error was 0.0339 m
+  and reference-heading error was 16.18°. All remained in the approach phase; neither staging
+  nor crossing was reached. Step 40 stopped on the obstacle guard after 0.0135 m and discarded
+  the reference. These tracking measurements do not establish doorway clearance.
+  The source points also did not establish a real doorway. At step 27, both selected
+  points in `view-00053` fell on the solid gray wall; projection refused their inferred width.
+  At step 30, the accepted pair from `view-00059` used corridor floor/wall features without two
+  identifiable near-jamb floor contacts. Movement along this generated reference therefore
+  tests execution of a geometric hypothesis, not valid doorway entry. The planner later tried
+  single-point alternatives; an obstacle refusal and an uninspected retry exhausted recovery.
+  The run remains negative navigation evidence despite its collision-free measured interval.
+- Three separate ER 2 semantic reviews used only an exact JPEG, measured camera label/angles,
+  and proposed point pair. Trial 018 `view-00059` was rejected as a corridor ending at a wall
+  (5.19 s); `view-00053` showed an opening but not both contacts (6.83 s); trial 013 `view-00032`
+  passed all three flags (6.45 s). The latter still contains the earlier apparent floor-seam
+  ambiguity, so these three samples support a veto for gross false/cropped proposals, not
+  precise endpoint validation or reliable navigation. Inputs, prompt/schema hashes, responses
+  and visual caveats are in trial 018's `gap-review-probe/results.json`.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.
