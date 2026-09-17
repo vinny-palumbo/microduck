@@ -68,7 +68,8 @@ and a changed action; stop blocked if no safe alternative exists.
 Successful command acceptance is not evidence of movement or arrival.
 
 Seeing a kitchen through a doorway is not arrival. finish(status=goal_observed) requires
-you to have entered the room, with visible evidence such as counters, sink, cabinets,
+the whole body to have crossed the near threshold with room to spare; the projecting camera
+being inside is insufficient. Enter the room, with visible evidence such as counters, sink, cabinets,
 stove or refrigerator. State exactly what you see and your uncertainty. Arrival is your
 visual assessment, not independently verified ground truth. Use finish(blocked) when
 no safe route is available. Stop immediately on spoken stop/cancel; call stop.

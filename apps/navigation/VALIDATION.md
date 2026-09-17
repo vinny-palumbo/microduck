@@ -232,6 +232,18 @@ Current integration evidence:
   1.599 m net displacement, complete coverage across 1,646 samples, zero obstacle contacts
   or falls, and no arrival. Holding the requested heading does not by itself solve doorway
   approach planning; this run remains an unsuccessful navigation trial.
+- The 013 doorway diagnosis found a real jamb return: a 376 mm ray projected to 341.7 mm
+  horizontally, correctly below the unchanged 350 mm guard. The opening center was 13.6°
+  left after the first arc and 10.2° right after the second. The oven appeared left of the
+  near-floor midpoint, so appliance identity did not supply a safe approach bearing.
+  Six paired provider replays compared the current prompt with a near-threshold rule on
+  steps 18, 19 and 20. Only step 19 changed, from another large left arc to a camera inspection
+  of both jambs; the other two actions were unchanged. The ignored
+  `doorway-approach-six-call-comparison.json` preserves inputs, prompt hashes and reconstruction
+  limits. The tested rule now asks for the near-floor midpoint, both margins and reassessment
+  after each translating arc. A separate wording correction requires full-body entry rather
+  than just camera entry; that correction was not part of the six replay calls. All 149 planner
+  tests and Ruff passed. No runtime map or simulator geometry was introduced.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

@@ -103,6 +103,15 @@ advance is a short walking arc, not an in-place turn. Use about 0.10 m arcs to a
 opening, reassess the actual measured heading, and reserve 0.20 m for visibly open straight
 space. Allow clearance throughout the swept arc; a requested heading is not guaranteed.
 
+For doorway entry, first navigate toward the center of the NEAR floor threshold
+between the two jambs, leaving margin from BOTH jambs. Do not aim toward an appliance or
+back wall seen through the doorway: that diagonal line can cross the near jamb even when
+the destination itself is visible. While alongside a corridor, approach along its clear
+floor until a short walking arc can cross the near threshold centrally. Plan the arc's
+forward translation before its turn, including the actual course error; it is not a pivot.
+If the near threshold and both jamb margins are not established by the available views,
+inspect them before committing to entry. Reassess that near-floor passage after each arc.
+
 Only advance when ready is true. Treat local guards as authoritative. A null depth return
 is not certified clearance; consider known zones, floor returns, and visible obstacles.
 Never move to probe a guard refusal. Follow recovery guidance, inspect a changed view,
@@ -115,8 +124,10 @@ places do not reset it. After inspecting both sides and recentering, if the obst
 remains blocked and no safe movement exists, finish blocked instead of repeating the scan.
 
 Seeing the destination through a doorway is not arrival. finish(goal_observed) requires
-visible evidence that the camera is inside the destination. Describe what is actually
-visible and the uncertainty; do not invent cabinets or appliances from plain walls/floors.
+visible evidence that the whole BODY has crossed the near threshold with room to spare.
+The camera projects ahead of the body, so its view alone does not establish full entry.
+Describe what is actually visible and the uncertainty; do not invent cabinets or appliances
+from plain walls/floors.
 An independent arrival reviewer may reject a claim. Read arrival_review and arrival_claims:
 after a rejected claim, gather different evidence or continue safe exploration instead of
 repeating the same claim. If entry cannot be established and no safe route remains, finish
