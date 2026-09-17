@@ -320,6 +320,18 @@ Current integration evidence:
   clearance do not prove gait tracking or obstacle-free space. This is an implementation to
   test, not evidence of successful doorway entry; see the
   [current contract](../../docs/robot/voice-guided-navigation.md#observed-doorway-reference).
+- Trial `runs/20260917T013305Z-fb4065f2` ended in error without reaching the kitchen.
+  Its 19 requested calls comprised one accepted voice goal and 18 visual-planning attempts.
+  Seventeen valid decisions completed: 12 gaze actions, three ordinary advances and two
+  single-point floor advances. The next reply was rejected with `invalid Gemini visual
+  planning decision` at step 19, before another physical action; the generic recorded error
+  does not identify the invalid response field. Neither floor selection supplied paired
+  endpoints, and no gap reference was created or followed, so this trial did not test gap
+  tracking. Exact scoring of `voice-mission-017.truth.jsonl`, saved in the run's
+  `independent-score.json`, found 0.8000 m net displacement over 140.003 s, valid coverage
+  across 1,400 samples, zero obstacle contacts or falls, and no physical or claimed arrival.
+  Final stop was acknowledged and the independent final sample was stopped; the final stop
+  acknowledgement itself did not verify physical settling.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

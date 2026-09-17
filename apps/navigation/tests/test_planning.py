@@ -16,6 +16,7 @@ from duck_nav.planning import (
     DEFAULT_VISUAL_MODEL,
     VISUAL_MODELS,
     GeminiVisualPlanner,
+    InvalidVisualDecision,
 )
 
 
@@ -79,7 +80,7 @@ def response(name="advance", args=None):
     }
 
 
-def install_http(monkeypatch, *, status=200, error=None, json_error=None):
+def install_http(monkeypatch, *, status=200, error=None, json_error=None, response_body=None):
     sent = {}
 
     class Reply:
@@ -95,7 +96,7 @@ def install_http(monkeypatch, *, status=200, error=None, json_error=None):
             sent["read_body"] = True
             if json_error:
                 raise json_error
-            return response()
+            return response() if response_body is None else copy.deepcopy(response_body)
 
     class Session:
         def __init__(self, *, timeout):
@@ -568,6 +569,131 @@ def test_provider_must_return_one_complete_tool(failure):
         planner().parse(data)
 
 
+@pytest.mark.parametrize(
+    "category",
+    [
+        "response_type",
+        "candidate_count",
+        "candidate_shape",
+        "finish_reason",
+        "content_parts",
+        "function_call_count",
+        "function_call_shape",
+        "tool_name",
+        "argument_object",
+        "argument_keys",
+        "argument_value",
+        "argument_enum",
+    ],
+)
+def test_invalid_decision_categories_preserve_generic_message(category):
+    data = response()
+    candidate = data["candidates"][0]
+    call = candidate["content"]["parts"][0]["functionCall"]
+    if category == "response_type":
+        data = []
+    elif category == "candidate_count":
+        data["candidates"] = []
+    elif category == "candidate_shape":
+        data["candidates"] = [None]
+    elif category == "finish_reason":
+        candidate["finishReason"] = "MAX_TOKENS"
+    elif category == "content_parts":
+        candidate["content"]["parts"] = "private provider content"
+    elif category == "function_call_count":
+        candidate["content"]["parts"] = [{"text": "private provider content"}]
+    elif category == "function_call_shape":
+        candidate["content"]["parts"][0]["functionCall"] = "private provider content"
+    elif category == "tool_name":
+        call["name"] = "private provider content"
+    elif category == "argument_object":
+        call["args"] = "private provider content"
+    elif category == "argument_keys":
+        del call["args"]["distance_m"]
+    elif category == "argument_value":
+        call["args"]["distance_m"] = "private provider content"
+    else:
+        data = response("finish", {"status": "private provider content", "reason": "visible"})
+    with pytest.raises(
+        InvalidVisualDecision, match="^invalid Gemini visual planning decision$"
+    ) as caught:
+        planner().parse(data)
+    assert isinstance(caught.value, ValueError)
+    assert caught.value.diagnostics["validation_category"] == category
+    assert "private provider content" not in json.dumps(caught.value.diagnostics)
+    assert set(vars(caught.value)) == {"diagnostics"}
+
+
+def test_structural_diagnostics_include_only_known_argument_keys():
+    private = "private-key-and-provider-text"
+    data = response("advance", {"distance_m": private, "reason": private, private: private})
+    data["candidates"][0]["content"]["parts"].append({"text": private})
+    data["private_metadata"] = private
+    with pytest.raises(InvalidVisualDecision) as caught:
+        planner().parse(data)
+    diagnostics = caught.value.diagnostics
+    assert diagnostics == {
+        "validation_category": "argument_keys",
+        "candidate_count": 1,
+        "finish_reason": "STOP",
+        "call_count": 1,
+        "tool_name": "advance",
+        "argument_keys": ["distance_m", "reason"],
+        "unknown_argument_count": 1,
+    }
+    assert private not in str(caught.value) + repr(caught.value) + json.dumps(diagnostics)
+    data.clear()
+    assert diagnostics["argument_keys"] == ["distance_m", "reason"]
+
+
+@pytest.mark.parametrize("finish", ["MAX_TOKENS", "private finish reason", ["private"]])
+def test_finish_diagnostics_are_whitelisted(finish):
+    data = response()
+    data["candidates"][0]["finishReason"] = finish
+    with pytest.raises(InvalidVisualDecision) as caught:
+        planner().parse(data)
+    assert caught.value.diagnostics["finish_reason"] == (
+        "MAX_TOKENS" if finish == "MAX_TOKENS" else "unknown"
+    )
+    assert caught.value.diagnostics["validation_category"] == "finish_reason"
+    assert "private" not in json.dumps(caught.value.diagnostics)
+
+
+@pytest.mark.parametrize("name", ["private tool name", ["private"], {"private": 1}, "say"])
+def test_unknown_tool_diagnostics_never_reflect_its_argument_names(name):
+    with pytest.raises(InvalidVisualDecision) as caught:
+        planner().parse(response(name, {"reason": "private", "private key": "private"}))
+    diagnostics = caught.value.diagnostics
+    assert diagnostics["tool_name"] == "unknown"
+    assert diagnostics["argument_keys"] == []
+    assert diagnostics["unknown_argument_count"] == 2
+    assert "private" not in json.dumps(diagnostics)
+
+
+def test_multiple_calls_and_candidates_report_counts_without_selecting_one():
+    data = response()
+    data["candidates"][0]["content"]["parts"].append(
+        {"functionCall": {"name": "private", "args": {"private": "private"}}}
+    )
+    with pytest.raises(InvalidVisualDecision) as caught:
+        planner().parse(data)
+    assert caught.value.diagnostics["call_count"] == 2
+    assert caught.value.diagnostics["tool_name"] == "unknown"
+    assert caught.value.diagnostics["argument_keys"] == []
+    data["candidates"].append(copy.deepcopy(data["candidates"][0]))
+    with pytest.raises(InvalidVisualDecision) as caught:
+        planner().parse(data)
+    assert caught.value.diagnostics["candidate_count"] == 2
+    assert caught.value.diagnostics["call_count"] is None
+    assert "private" not in json.dumps(caught.value.diagnostics)
+
+
+def test_diagnostic_category_does_not_reflect_arbitrary_constructor_input():
+    error = InvalidVisualDecision("private exception text")
+    assert error.diagnostics["validation_category"] == "unknown"
+    assert "private" not in str(error) + json.dumps(error.diagnostics)
+
+
 @pytest.mark.asyncio
 async def test_http_contract(monkeypatch):
     sent = install_http(monkeypatch)
@@ -637,10 +763,30 @@ async def test_invalid_prior_image_fails_before_network(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_input_validation_is_not_a_provider_decision_failure(monkeypatch):
+    sent = install_http(monkeypatch)
+    with pytest.raises(ValueError) as caught:
+        await planner().decide(context(goal=""), JPEG)
+    assert not isinstance(caught.value, InvalidVisualDecision)
+    assert sent == {}
+
+
+@pytest.mark.asyncio
+async def test_http_200_invalid_decision_exposes_safe_diagnostics(monkeypatch):
+    install_http(monkeypatch, response_body=response("private", {"private": "private"}))
+    with pytest.raises(InvalidVisualDecision) as caught:
+        await planner().decide(context(), JPEG)
+    assert caught.value.diagnostics["validation_category"] == "tool_name"
+    assert caught.value.diagnostics["tool_name"] == "unknown"
+    assert "private" not in json.dumps(caught.value.diagnostics)
+
+
+@pytest.mark.asyncio
 async def test_http_error_never_reads_body(monkeypatch):
     sent = install_http(monkeypatch, status=403)
-    with pytest.raises(RuntimeError, match="^Gemini visual planning HTTP 403$"):
+    with pytest.raises(RuntimeError, match="^Gemini visual planning HTTP 403$") as caught:
         await planner().decide(context(), JPEG)
+    assert not isinstance(caught.value, InvalidVisualDecision)
     assert "read_body" not in sent
 
 
@@ -651,13 +797,19 @@ async def test_transport_errors_are_redacted(monkeypatch, error):
     with pytest.raises((RuntimeError, TimeoutError)) as caught:
         await planner().decide(context(), JPEG)
     assert "secret" not in str(caught.value)
+    assert not isinstance(caught.value, InvalidVisualDecision)
 
 
 @pytest.mark.asyncio
 async def test_invalid_json_is_redacted(monkeypatch):
     install_http(monkeypatch, json_error=ValueError("secret body"))
-    with pytest.raises(ValueError, match="^invalid Gemini visual planning response$"):
+    with pytest.raises(
+        InvalidVisualDecision, match="^invalid Gemini visual planning response$"
+    ) as caught:
         await planner().decide(context(), JPEG)
+    assert caught.value.diagnostics["validation_category"] == "invalid_json"
+    assert caught.value.diagnostics["candidate_count"] is None
+    assert "secret" not in json.dumps(caught.value.diagnostics)
 
 
 @pytest.mark.asyncio

@@ -1220,37 +1220,73 @@ class LiveMission:
         if name in expected and set(args) != expected[name]:
             raise ValueError(f"Unexpected or missing {name} arguments")
         if name == "navigate":
+            from .planning import InvalidVisualDecision
+
             _text(args["reason"], "reason", 1000)
             if self.navigation_planner is None or not self.goal:
                 raise ValueError("Navigate requires a visual planner and an accepted user goal")
             step = self.actions
-            await fresh_observation(
-                self.robot,
-                self.transport,
-                time.monotonic(),
-                self.config.observation_timeout_s,
-            )
-            snapshot, observation = await self.image()
-            context = self.context(observation)
-            views, references = self.stationary_views.prior(snapshot, context["camera"])
-            self.supplied_view_ids = {
-                camera["view_id"]
-                for camera in [context["camera"], *(view["camera"] for view in views)]
-                if camera is not None
-            }
-            self.record(
-                "visual_views_selected",
-                step=step,
-                context=copy.deepcopy(context),
-                current={"camera": context["camera"], "image_path": observation["image_path"]},
-                previous=references,
-            )
-            # The voice model's explanation is not input to the visual planner. Only
-            # the original goal, selected observations and actual action history are.
-            decision = await asyncio.wait_for(
-                self.navigation_planner.decide(context, _jpeg(snapshot), views=views),
-                self.config.model_timeout_s,
-            )
+            for attempt in (1, 2):
+                if self.done.is_set():
+                    raise asyncio.CancelledError
+                await fresh_observation(
+                    self.robot,
+                    self.transport,
+                    time.monotonic(),
+                    self.config.observation_timeout_s,
+                )
+                snapshot, observation = await self.image()
+                if attempt > 1:
+                    guard = observation["guard_reason"]
+                    move = snapshot["state"]["data"]["move"]
+                    stationary = all(v == 0 for v in _vector(move["requested"], 3)) and all(
+                        abs(v) < 0.001 for v in _vector(move["applied"], 3)
+                    )
+                    if (
+                        guard is not None and guard not in RECOVERABLE_GUARD_REASONS
+                    ) or not stationary:
+                        self.clear_gap("unsafe_visual_retry")
+                        await self.robot.stop()
+                        raise RuntimeError(
+                            "Visual retry requires stopped commands and healthy sensors"
+                        )
+                if self.done.is_set():
+                    raise asyncio.CancelledError
+                context = self.context(observation)
+                views, references = self.stationary_views.prior(snapshot, context["camera"])
+                self.supplied_view_ids = {
+                    camera["view_id"]
+                    for camera in [context["camera"], *(view["camera"] for view in views)]
+                    if camera is not None
+                }
+                self.record(
+                    "visual_views_selected",
+                    step=step,
+                    attempt=attempt,
+                    context=copy.deepcopy(context),
+                    current={"camera": context["camera"], "image_path": observation["image_path"]},
+                    previous=references,
+                )
+                # A malformed reply never dispatches a tool. One fresh, independently
+                # validated request can recover a transient format failure while stopped.
+                try:
+                    decision = await asyncio.wait_for(
+                        self.navigation_planner.decide(context, _jpeg(snapshot), views=views),
+                        self.config.model_timeout_s,
+                    )
+                    break
+                except InvalidVisualDecision as error:
+                    self.record(
+                        "visual_reply_rejected",
+                        step=step,
+                        attempt=attempt,
+                        diagnostics=error.diagnostics,
+                        will_retry=attempt == 1,
+                    )
+                    if self.done.is_set():
+                        raise asyncio.CancelledError
+                    if attempt == 2:
+                        raise
             if self.done.is_set():
                 raise asyncio.CancelledError
             if (

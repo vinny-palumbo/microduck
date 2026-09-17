@@ -54,6 +54,11 @@ session listens for cancellation; continuing does not require another spoken or 
 Use `--visual-planner streaming` to compare the original mode, where the streaming model chooses
 the physical actions itself. Both modes use the same movement guards and arrival reviewer.
 
+An invalid visual tool reply is never executed. Standard mode records only bounded structural
+diagnostics and allows one retry with fresh images, healthy sensors and stopped movement
+commands. A second invalid reply ends the mission and requests a stop; network failures and
+timeouts are not retried this way. Voice cancellation remains active during either request.
+
 For an experimental comparison of the standard planner, add
 `--visual-model gemini-3.8-flash`. This uses medium reasoning and an 8,192-token response
 budget; voice and arrival review still use Robotics ER 2. The default visual model remains
