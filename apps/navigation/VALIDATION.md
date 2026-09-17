@@ -360,6 +360,11 @@ Current integration evidence:
   ambiguity, so these three samples support a veto for gross false/cropped proposals, not
   precise endpoint validation or reliable navigation. Inputs, prompt/schema hashes, responses
   and visual caveats are in trial 018's `gap-review-probe/results.json`.
+- The same three JPEGs, exact camera/point inputs, checksums and provenance are versioned in
+  `tests/fixtures/gap_review`. Run `uv run python scripts/validate_gap_review.py` explicitly to
+  make three provider reviews and save a local regression report. Expected flags never enter
+  provider inputs; the positive case's ambiguity remains documented. The diagnostic's 25
+  offline tests pass without provider or robot calls.
 
 Full visual exploration and kitchen arrival are still under development. All runtime navigation
 decisions use robot camera/depth/odometry only. Simulator truth stays in post-run scoring.

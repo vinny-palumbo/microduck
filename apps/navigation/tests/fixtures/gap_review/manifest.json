@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "description": "Three exact recorded simulator JPEGs for manual semantic gap-review regression. Expected flags reproduce the initial one-call-per-image probe and remain scorer-only; they are not ground truth or a validated safety classifier.",
+  "limits": "The positive case contains ambiguous near-jamb localization: its left annotation is roughly 10 pixels above the nearest visible corner, near a farther floor seam. Passing does not establish metric endpoint accuracy, clearance, arrival, or navigation success. No robot is connected by this diagnostic.",
+  "original_probe": {
+    "file": "runs/20260917T014258Z-f579a09f/gap-review-probe/results.json",
+    "sha256": "939b9c61d972811be2c3d135622c28807c0c1be24d615552353bf7c6d71435d3",
+    "at": "2026-09-17T01:52:17.379996+00:00",
+    "model": "gemini-robotics-er-2-preview",
+    "prompt_sha256": "475bb78690ce3ed7ecca7f3d0effdc898c6c9cd2e2d3655df0cf8f090e00e53b",
+    "schema_sha256": "f22364b91f61675ebce985ac458e515f6b2d5054874f5fcfd21c9c83a4e9ffba",
+    "call_count": 3
+  },
+  "cases": [
+    {
+      "name": "018-view00059",
+      "expected": {
+        "doorway_visible": false,
+        "both_contacts_visible": false,
+        "points_match_contacts": false
+      },
+      "image": {
+        "file": "018-view00059.jpg",
+        "jpeg_sha256": "9308ee869a585f3fc9c1d4ad78452d836f62d72c1dfaba9e1cb482343bce4f22",
+        "width": 360,
+        "height": 640
+      },
+      "inputs": {
+        "view": "CURRENT",
+        "camera": {
+          "view_id": "view-00059",
+          "label": "right",
+          "yaw_deg": -38.03752770014445,
+          "pitch_deg": -7.761009541354485
+        },
+        "proposed_endpoints": [
+          [
+            560,
+            220
+          ],
+          [
+            495,
+            750
+          ]
+        ],
+        "point_order": "y,x",
+        "coordinate_range": [
+          0,
+          1000
+        ]
+      },
+      "inputs_sha256": "a67ce2233118621963b0c275a692cc50c8b7e0056f75b6a605be1f10cef0116b",
+      "provenance": {
+        "source_file": "runs/20260917T014258Z-f579a09f/view-00059.jpg",
+        "source_sha256": "9308ee869a585f3fc9c1d4ad78452d836f62d72c1dfaba9e1cb482343bce4f22",
+        "source_observation_at": 1789609620.7304387,
+        "probe_image_file": "runs/20260917T014258Z-f579a09f/gap-review-probe/018-view00059.jpg",
+        "probe_inputs_file": "runs/20260917T014258Z-f579a09f/gap-review-probe/018-view00059-inputs.json",
+        "probe_inputs_sha256": "b9338bf7b38d87fbfe40bfc07d69e7d8e7869b6372689a91f6db5f7798fe67a4",
+        "conversion": "unchanged JPEG bytes"
+      },
+      "annotation_note": "No open doorway is established. The first point is on yellow foreground floor, the second near the wall/floor junction above the striped corridor. The reviewer correctly rejects the proposal and provides no substitute endpoints."
+    },
+    {
+      "name": "018-view00053",
+      "expected": {
+        "doorway_visible": true,
+        "both_contacts_visible": false,
+        "points_match_contacts": false
+      },
+      "image": {
+        "file": "018-view00053.jpg",
+        "jpeg_sha256": "fbf360194c8c21e52bf93030b6ad7c7216148710f62fc57ebc34e1856ddccad2",
+        "width": 360,
+        "height": 640
+      },
+      "inputs": {
+        "view": "CURRENT",
+        "camera": {
+          "view_id": "view-00053",
+          "label": "left",
+          "yaw_deg": 26.497518612568047,
+          "pitch_deg": -10.48912769752878
+        },
+        "proposed_endpoints": [
+          [
+            540,
+            215
+          ],
+          [
+            465,
+            765
+          ]
+        ],
+        "point_order": "y,x",
+        "coordinate_range": [
+          0,
+          1000
+        ]
+      },
+      "inputs_sha256": "1f53bc7f0cf306b64dbd6b2a6665091ca4a6601f036e57b7a5df0fe57369ccea",
+      "provenance": {
+        "source_file": "runs/20260917T014258Z-f579a09f/view-00053.jpg",
+        "source_sha256": "fbf360194c8c21e52bf93030b6ad7c7216148710f62fc57ebc34e1856ddccad2",
+        "source_observation_at": 1789609595.614664,
+        "probe_image_file": "runs/20260917T014258Z-f579a09f/gap-review-probe/018-view00053.jpg",
+        "probe_inputs_file": "runs/20260917T014258Z-f579a09f/gap-review-probe/018-view00053-inputs.json",
+        "probe_inputs_sha256": "dd05cf179172e1c9c103bc0b632f7f2041945773ed522dba1fdf16179f56238f",
+        "conversion": "unchanged JPEG bytes"
+      },
+      "annotation_note": "Both proposed points are on the large gray wall. A partial opening is visible at the right edge, but its opposite jamb is outside the image. The reviewer rejects the pair based on missing visibility; it does not explicitly identify both proposed pixels as wall pixels."
+    },
+    {
+      "name": "013-view00032",
+      "expected": {
+        "doorway_visible": true,
+        "both_contacts_visible": true,
+        "points_match_contacts": true
+      },
+      "image": {
+        "file": "013-view00032.jpg",
+        "jpeg_sha256": "3b8d3d409151344d3faf5a418c3e31ac08890f9f4b87d6b4c65281735c13d596",
+        "width": 360,
+        "height": 640
+      },
+      "inputs": {
+        "view": "CURRENT",
+        "camera": {
+          "view_id": "view-00032",
+          "label": "left",
+          "yaw_deg": 44.060892383614735,
+          "pitch_deg": -8.422090289128398
+        },
+        "proposed_endpoints": [
+          [
+            598,
+            325
+          ],
+          [
+            480,
+            960
+          ]
+        ],
+        "point_order": "y,x",
+        "coordinate_range": [
+          0,
+          1000
+        ]
+      },
+      "inputs_sha256": "1b63fe62d1314ceb8d31fc9d803d9bdc9e28135309ce97355d28de335e3dd7f1",
+      "provenance": {
+        "source_file": "runs/20260917T000748Z-50e6f8a8/view-00032.jpg",
+        "source_sha256": "3b8d3d409151344d3faf5a418c3e31ac08890f9f4b87d6b4c65281735c13d596",
+        "source_observation_at": 1789603774.8265262,
+        "probe_image_file": "runs/20260917T014258Z-f579a09f/gap-review-probe/013-view00032.jpg",
+        "probe_inputs_file": "runs/20260917T014258Z-f579a09f/gap-review-probe/013-view00032-inputs.json",
+        "probe_inputs_sha256": "8f42b60bc6d05c9105d4bdebac71a8615400ef12d78c872b21717db300b9eace",
+        "conversion": "unchanged JPEG bytes"
+      },
+      "annotation_note": "A real opening is visible. The reviewer accepts and repeats the proposed endpoints, but the left point remains roughly 10px above the nearest gray wall/floor corner near (117,393), closer to a farther floor seam. The right edge remains visually ambiguous. This does not independently establish precise near-jamb localization."
+    }
+  ]
+}
